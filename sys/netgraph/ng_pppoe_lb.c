@@ -65,11 +65,14 @@ static int ng_pppoe_lb_debug = 0;
 
 /* Governor sysctl variables */
 static int ng_pppoe_lb_governor_enabled = 0;
-static int ng_pppoe_lb_governor_max_workers = 0;
+static int ng_pppoe_lb_governor_max_workers = 0;  /* 0 = auto (mp_ncpus) */
 static int ng_pppoe_lb_governor_cpu_threshold = 80;
 static int ng_pppoe_lb_governor_cpu_low_threshold = 30;
 static int ng_pppoe_lb_governor_scale_up_interval = 10;
 static int ng_pppoe_lb_governor_scale_down_interval = 60;
+
+/* Include for CPU statistics */
+#include <sys/resource.h>
 
 SYSCTL_NODE(_net_graph, OID_AUTO, pppoe_lb, CTLFLAG_RW, 0, "PPPoE Load Balancer");
 SYSCTL_INT(_net_graph_pppoe_lb, OID_AUTO, enabled, CTLFLAG_RW, &ng_pppoe_lb_enabled, 0,
@@ -87,7 +90,7 @@ SYSCTL_NODE(_net_graph_pppoe_lb, OID_AUTO, governor, CTLFLAG_RW, 0, "CPU Governo
 SYSCTL_INT(_net_graph_pppoe_lb_governor, OID_AUTO, enabled, CTLFLAG_RW, &ng_pppoe_lb_governor_enabled, 0,
     "Enable CPU governor (0=disabled, 1=enabled)");
 SYSCTL_INT(_net_graph_pppoe_lb_governor, OID_AUTO, max_workers, CTLFLAG_RW, &ng_pppoe_lb_governor_max_workers, 0,
-    "Maximum workers (0=unlimited)");
+    "Maximum workers (0=auto/mp_ncpus, >0=hard cap)");
 SYSCTL_INT(_net_graph_pppoe_lb_governor, OID_AUTO, cpu_threshold, CTLFLAG_RW, &ng_pppoe_lb_governor_cpu_threshold, 0,
     "CPU % threshold to spawn more workers");
 SYSCTL_INT(_net_graph_pppoe_lb_governor, OID_AUTO, cpu_low_threshold, CTLFLAG_RW, &ng_pppoe_lb_governor_cpu_low_threshold, 0,
@@ -263,7 +266,13 @@ ng_pppoe_lb_constructor(node_p node)
 	LIST_INIT(&priv->sess_list);
 	priv->num_workers = 0;
 	priv->num_workers_active = 0;
-	priv->max_workers = ng_pppoe_lb_governor_max_workers;
+	/* Initialize max_workers: 0 means auto-detect to mp_ncpus */
+	if (ng_pppoe_lb_governor_max_workers <= 0) {
+		priv->max_workers = mp_ncpus;
+	} else {
+		/* Hard cap: never exceed mp_ncpus even if user sets higher */
+		priv->max_workers = min(ng_pppoe_lb_governor_max_workers, mp_ncpus);
+	}
 	priv->algorithm = ng_pppoe_lb_algorithm;
 	priv->debug_level = ng_pppoe_lb_debug;
 	priv->next_worker = 0;
@@ -687,14 +696,15 @@ ng_pppoe_lb_remove_session(struct ng_pppoe_lb_private *priv, uint16_t session_id
 	return (0);
 }
 
-/* Governor tick function */
+/* Governor tick function - monitors CPU load and scales workers */
 static void
 ng_pppoe_lb_governor_tick(void *arg)
 {
-#ifdef notyet
 	struct ng_pppoe_lb_private *priv;
 	time_t now;
 	int avg_cpu, target_workers;
+	long cp_time[CPUSTATES];
+	long total_time, idle_time;
 
 	priv = (struct ng_pppoe_lb_private *)arg;
 
@@ -703,25 +713,52 @@ ng_pppoe_lb_governor_tick(void *arg)
 
 	now = time_uptime;
 
-	/* TODO: Implement CPU load monitoring */
-	avg_cpu = 0;  /* Placeholder */
+	/* Read CPU statistics */
+	read_cpu_time(cp_time);
 
+	/* Calculate CPU utilization percentage */
+	total_time = cp_time[CP_USER] + cp_time[CP_NICE] + cp_time[CP_SYS] +
+	    cp_time[CP_INTR] + cp_time[CP_IDLE];
+	idle_time = cp_time[CP_IDLE];
+
+	if (total_time > 0) {
+		/* CPU usage = 100 - (idle_time * 100 / total_time) */
+		avg_cpu = 100 - (int)((idle_time * 100) / total_time);
+	} else {
+		avg_cpu = 0;
+	}
+
+	/* Scale up decision */
 	if (avg_cpu > ng_pppoe_lb_governor_cpu_threshold &&
 	    now - priv->last_scale_up >= ng_pppoe_lb_governor_scale_up_interval) {
-		/* Scale up */
-		if (priv->max_workers == 0 || priv->num_workers < priv->max_workers) {
-			/* TODO: Add worker */
+		if (priv->num_workers < priv->max_workers) {
+			/* Can scale up - signal via flag (actual worker creation
+			 * happens in userland via ngctl or pppoed) */
 			priv->last_scale_up = now;
+			if (priv->debug_level >= 1) {
+				printf("ng_pppoe_lb: governor wants to scale up "
+				    "(CPU=%d%%, workers=%d/%d)\n",
+				    avg_cpu, priv->num_workers, priv->max_workers);
+			}
 		}
-	} else if (avg_cpu < ng_pppoe_lb_governor_cpu_low_threshold &&
+	}
+
+	/* Scale down decision */
+	if (avg_cpu < ng_pppoe_lb_governor_cpu_low_threshold &&
 	    now - priv->last_scale_down >= ng_pppoe_lb_governor_scale_down_interval &&
 	    priv->num_workers > 1) {
-		/* Scale down */
-		/* TODO: Remove worker */
+		target_workers = priv->num_workers - 1;
+		if (target_workers < 1)
+			target_workers = 1;
 		priv->last_scale_down = now;
+		if (priv->debug_level >= 1) {
+			printf("ng_pppoe_lb: governor wants to scale down "
+			    "(CPU=%d%%, workers=%d->%d)\n",
+			    avg_cpu, priv->num_workers, target_workers);
+		}
 	}
 
 out:
+	/* Schedule next tick */
 	callout_reset(&priv->governor_callout, hz, ng_pppoe_lb_governor_tick, priv);
-#endif
 }

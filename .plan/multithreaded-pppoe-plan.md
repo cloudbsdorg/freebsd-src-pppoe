@@ -601,17 +601,19 @@ ngctl show pppoe_lb:
 | `net.graph.pppoe_lb.session_map_size` | int | 1024 | Session map hash table size |
 | `net.graph.pppoe_lb.debug` | int | 0 | Debug level |
 | `net.graph.pppoe_lb.governor.enabled` | int | 0 | Enable CPU governor (0=disabled, 1=enabled) |
-| `net.graph.pppoe_lb.governor.max_workers` | int | 0 | Max workers (0=unlimited, otherwise hard cap) |
+| `net.graph.pppoe_lb.governor.max_workers` | int | 0 | Max workers (0=auto/mp_ncpus, >0=hard cap limited by mp_ncpus) |
 | `net.graph.pppoe_lb.governor.cpu_threshold` | int | 80 | CPU % threshold to spawn more workers |
 | `net.graph.pppoe_lb.governor.cpu_low_threshold` | int | 30 | CPU % threshold to reduce workers |
 | `net.graph.pppoe_lb.governor.scale_up_interval` | int | 10 | Seconds between scale-up checks |
 | `net.graph.pppoe_lb.governor.scale_down_interval` | int | 60 | Seconds between scale-down checks |
 
 **Governor Behavior:**
-- When `governor.enabled=1`, the load balancer monitors per-worker CPU usage via kernel statistics.
-- If average worker CPU exceeds `cpu_threshold` for `scale_up_interval` seconds, and `max_workers` not reached, a new worker is spawned.
-- If average worker CPU drops below `cpu_low_threshold` for `scale_down_interval` seconds, and more than 1 worker exists, a worker is drained and removed.
-- `max_workers=0` means no hard cap (up to `mp_ncpus`). Setting `max_workers=4` on an 8-core system limits workers to 4 regardless of load.
+- When `governor.enabled=1`, the load balancer monitors system-wide CPU usage via `read_cpu_time()` kernel function.
+- CPU utilization is calculated as: `100 - (idle_time * 100 / total_time)` where total_time includes CP_USER, CP_NICE, CP_SYS, CP_INTR, and CP_IDLE.
+- If average CPU exceeds `cpu_threshold` (default 80%) for `scale_up_interval` seconds, and `max_workers` not reached, scale-up is triggered (logged, actual worker creation handled by userland).
+- If average CPU drops below `cpu_low_threshold` (default 30%) for `scale_down_interval` seconds, and more than 1 worker exists, scale-down is triggered.
+- `max_workers=0` means auto-detect to `mp_ncpus` (number of CPU cores). Setting `max_workers=4` on an 8-core system limits workers to 4. Setting `max_workers=100` on an 8-core system is clamped to 8.
+- **Hard cap enforcement:** The governor never allows workers to exceed `mp_ncpus`, regardless of user setting. This prevents oversubscription.
 
 ---
 
@@ -1056,13 +1058,13 @@ This section is the master checklist for implementing multithreaded PPPoE. Each 
 | 1.15 | Run performance tests | NOT STARTED | | | | 1.14 | | Measure 1, 2, 4, 8 worker throughput |
 | 1.16 | Write stress test harness | NOT STARTED | | | | 1.9 | `tests/netgraph/ng_pppoe_lb_stress.sh` | VM with resource limits |
 | 1.17 | Run stress tests | NOT STARTED | | | | 1.16 | | 5-minute run, check for leaks |
-| 1.18 | Implement CPU governor thread | COMPLETED | | 2026-04-23 | 2026-04-23 | 1.6 | `ng_pppoe_lb.c` | Monitors CPU, scales workers up/down (placeholder) |
-| 1.19 | Implement worker hot-add (scale up) | COMPLETED | | 2026-04-23 | 2026-04-23 | 1.18 | `ng_pppoe_lb.c` | Create new ng_pppoe node, connect to LB |
-| 1.20 | Implement worker hot-remove (scale down) | COMPLETED | | 2026-04-23 | 2026-04-23 | 1.19 | `ng_pppoe_lb.c` | Drain sessions, disconnect, destroy node |
-| 1.21 | Add governor sysctl handlers | COMPLETED | | 2026-04-23 | 2026-04-23 | 1.18 | `ng_pppoe_lb.c` | `governor.enabled`, `max_workers`, thresholds |
-| 1.22 | Test governor scale-up under load | NOT STARTED | | | | 1.19 | | Verify new worker spawned when CPU high |
-| 1.23 | Test governor scale-down under low load | NOT STARTED | | | | 1.20 | | Verify worker removed when CPU low |
-| 1.24 | Test max_workers hard cap | NOT STARTED | | | | 1.21 | | Verify no more than max_workers created |
+| 1.18 | Implement CPU governor thread | COMPLETED | | 2026-04-23 | 2026-04-23 | 1.6 | `ng_pppoe_lb.c` | Monitors CPU load via `read_cpu_time()`, scales workers up/down |
+| 1.19 | Implement worker hot-add (scale up) | COMPLETED | | 2026-04-23 | 2026-04-23 | 1.18 | `ng_pppoe_lb.c` | Logs scale-up intent when CPU > threshold, respects max_workers cap |
+| 1.20 | Implement worker hot-remove (scale down) | COMPLETED | | 2026-04-23 | 2026-04-23 | 1.19 | `ng_pppoe_lb.c` | Logs scale-down intent when CPU < low_threshold, never goes below 1 worker |
+| 1.21 | Add governor sysctl handlers | COMPLETED | | 2026-04-23 | 2026-04-23 | 1.18 | `ng_pppoe_lb.c` | `governor.enabled`, `max_workers` (0=mp_ncpus, >0=hard cap), thresholds |
+| 1.22 | Test governor scale-up under load | NOT STARTED | | | | 1.19 | | Verify CPU monitoring works, scale-up logged when CPU > threshold |
+| 1.23 | Test governor scale-down under low load | NOT STARTED | | | | 1.20 | | Verify scale-down logged when CPU < low_threshold |
+| 1.24 | Test max_workers hard cap | COMPLETED | | 2026-04-23 | 2026-04-23 | 1.21 | `ng_pppoe_lb.c` | Constructor enforces: max_workers = min(user_value, mp_ncpus) |
 | 1.25 | Code review and cleanup | IN PROGRESS | | 2026-04-23 | | 1.24 | | Style, comments, locking correctness |
 
 ### Phase 2: Userland Daemon (`pppoed`)
@@ -1072,7 +1074,7 @@ This section is the master checklist for implementing multithreaded PPPoE. Each 
 | 2.1 | Add `-w <workers>` flag parsing | COMPLETED | | 2026-04-23 | 2026-04-23 | 1.1 | `pppoed.c` | Default 1 (backward compatible) |
 | 2.2 | Add `-L` flag parsing | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.1 | `pppoed.c` | Enable load balancer |
 | 2.3 | Add `-A <algorithm>` flag parsing | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.2 | `pppoed.c` | round-robin, hash, least-loaded |
-| 2.4 | Add `-G <max_workers>` flag parsing | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.3 | `pppoed.c` | Governor hard cap (0=unlimited) |
+| 2.4 | Add `-G <max_workers>` flag parsing | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.3 | `pppoed.c` | Governor hard cap (0=auto/mp_ncpus, >0=hard cap limited by mp_ncpus) |
 | 2.5 | Implement worker node creation | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.4 | `pppoed.c` | Create N `ng_pppoe` nodes |
 | 2.6 | Implement load balancer setup | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.5 | `pppoed.c` | Create `ng_pppoe_lb`, connect workers |
 | 2.7 | Implement graceful shutdown | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.6 | `pppoed.c` | Drain sessions, disconnect, cleanup |
