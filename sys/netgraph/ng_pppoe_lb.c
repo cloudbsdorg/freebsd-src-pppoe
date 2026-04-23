@@ -49,12 +49,75 @@
 #include <sys/mbuf.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
+#include <sys/smp.h>
 
 #include <net/ethernet.h>
-#include <net/ppp/pppoe.h>
-#include <netgraph/ng_base.h>
+#include <netgraph/ng_message.h>
+#include <netgraph/netgraph.h>
+#include <netgraph/ng_parse.h>
+#include <netgraph/ng_pppoe.h>
+#include <netgraph/ng_ether.h>
 
 #include "ng_pppoe_lb.h"
+
+/* Memory type */
+#ifdef NG_SEPARATE_MALLOC
+static MALLOC_DEFINE(M_NETGRAPH_PPPOE_LB, "netgraph_pppoe_lb", "netgraph pppoe_lb node");
+#else
+#define M_NETGRAPH_PPPOE_LB M_NETGRAPH
+#endif
+
+/* Parse types for control messages */
+static const struct ng_parse_struct_field ng_pppoe_lb_add_worker_type_fields[]
+	= NG_PPPOE_LB_ADD_WORKER_TYPE_INFO;
+static const struct ng_parse_type ng_pppoe_lb_add_worker_type = {
+	&ng_parse_struct_type,
+	&ng_pppoe_lb_add_worker_type_fields
+};
+
+static const struct ng_parse_struct_field ng_pppoe_lb_remove_worker_type_fields[]
+	= { { "worker_index", &ng_parse_int32_type }, { NULL } };
+static const struct ng_parse_type ng_pppoe_lb_remove_worker_type = {
+	&ng_parse_struct_type,
+	&ng_pppoe_lb_remove_worker_type_fields
+};
+
+static const struct ng_parse_struct_field ng_pppoe_lb_config_type_fields[]
+	= NG_PPPOE_LB_CONFIG_TYPE_INFO;
+static const struct ng_parse_type ng_pppoe_lb_config_type = {
+	&ng_parse_struct_type,
+	&ng_pppoe_lb_config_type_fields
+};
+
+static const struct ng_parse_struct_field ng_pppoe_lb_stats_type_fields[]
+	= NG_PPPOE_LB_STATS_TYPE_INFO;
+static const struct ng_parse_type ng_pppoe_lb_stats_type = {
+	&ng_parse_struct_type,
+	&ng_pppoe_lb_stats_type_fields
+};
+
+static const struct ng_parse_struct_field ng_pppoe_lb_map_entry_type_fields[]
+	= NG_PPPOE_LB_MAP_ENTRY_TYPE_INFO;
+static const struct ng_parse_type ng_pppoe_lb_map_entry_type = {
+	&ng_parse_struct_type,
+	&ng_pppoe_lb_map_entry_type_fields
+};
+
+static const struct ng_parse_array_info ng_pppoe_lb_map_entry_array_info = {
+	&ng_pppoe_lb_map_entry_type,
+	NULL	/* fixed-size array, no getLength needed */
+};
+static const struct ng_parse_type ng_pppoe_lb_map_entry_array_type = {
+	&ng_parse_array_type,
+	&ng_pppoe_lb_map_entry_array_info
+};
+
+static const struct ng_parse_struct_field ng_pppoe_lb_map_type_fields[]
+	= NG_PPPOE_LB_MAP_TYPE_INFO;
+static const struct ng_parse_type ng_pppoe_lb_map_type = {
+	&ng_parse_struct_type,
+	&ng_pppoe_lb_map_type_fields
+};
 
 /* Sysctl variables */
 static int ng_pppoe_lb_enabled = 0;
@@ -145,7 +208,7 @@ struct ng_pppoe_lb_private {
 
 /* Forward declarations */
 static int ng_pppoe_lb_constructor(node_p node);
-static int ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_t lasthook);
+static int ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook);
 static int ng_pppoe_lb_shutdown(node_p node);
 static int ng_pppoe_lb_newhook(node_p node, hook_p hook, const char *name);
 static int ng_pppoe_lb_connect(hook_p hook);
@@ -163,39 +226,39 @@ static void ng_pppoe_lb_governor_tick(void *arg);
 /* Command list */
 static const struct ng_cmdlist ng_pppoe_lb_cmds[] = {
 	{
+		NGM_PPPOE_LB_COOKIE,
 		NGM_PPPOE_LB_ADD_WORKER,
 		"add_worker",
-		"add_worker",
-		&ngms_pppoe_lb_add_worker,
-		&ngms_pppoe_lb_add_worker,
+		&ng_pppoe_lb_add_worker_type,
+		NULL,
 	},
 	{
+		NGM_PPPOE_LB_COOKIE,
 		NGM_PPPOE_LB_REMOVE_WORKER,
 		"remove_worker",
-		"remove_worker",
-		&ngms_pppoe_lb_remove_worker,
+		&ng_pppoe_lb_remove_worker_type,
 		NULL,
 	},
 	{
+		NGM_PPPOE_LB_COOKIE,
 		NGM_PPPOE_LB_SET_CONFIG,
 		"set_config",
-		"set_config",
-		&ngms_pppoe_lb_config,
+		&ng_pppoe_lb_config_type,
 		NULL,
 	},
 	{
+		NGM_PPPOE_LB_COOKIE,
 		NGM_PPPOE_LB_GET_STATS,
 		"get_stats",
-		"get_stats",
 		NULL,
-		&ngms_pppoe_lb_stats,
+		&ng_pppoe_lb_stats_type,
 	},
 	{
+		NGM_PPPOE_LB_COOKIE,
 		NGM_PPPOE_LB_GET_MAP,
 		"get_map",
-		"get_map",
-		&ngms_pppoe_lb_map,
-		&ngms_pppoe_lb_map,
+		NULL,
+		&ng_pppoe_lb_map_type,
 	},
 	{ 0 }
 };
@@ -214,43 +277,6 @@ static struct ng_type ng_pppoe_lb_typestruct = {
 };
 
 NETGRAPH_INIT(pppoe_lb, &ng_pppoe_lb_typestruct);
-
-/* Module initialization */
-static int
-ng_pppoe_lb_modload(struct module *mod, int type, void *data)
-{
-	int error = 0;
-
-	switch (type) {
-	case MOD_LOAD:
-		if (ng_pppoe_lb_enabled == 0) {
-			printf("ng_pppoe_lb: module loaded but disabled (set net.graph.pppoe_lb.enabled=1 to enable)\n");
-		}
-		break;
-	case MOD_UNLOAD:
-		/* Check if any nodes are still active */
-		if (ng_type_count(&ng_pppoe_lb_typestruct) > 0) {
-			error = EBUSY;
-			break;
-		}
-		break;
-	default:
-		error = EOPNOTSUPP;
-		break;
-	}
-	return (error);
-}
-
-static moduledata_t ng_pppoe_lb_mod = {
-	"ng_pppoe_lb",
-	ng_pppoe_lb_modload,
-	NULL
-};
-
-DECLARE_MODULE(ng_pppoe_lb, ng_pppoe_lb_mod, SI_SUB_PSEUDO, SI_ORDER_ANY);
-MODULE_VERSION(ng_pppoe_lb, 1);
-MODULE_DEPEND(ng_pppoe_lb, netgraph, NG_ABI_VERSION, NG_ABI_VERSION, NG_ABI_VERSION);
-MODULE_DEPEND(ng_pppoe_lb, ng_pppoe, 1, 1, 1);
 
 /* Node constructor */
 static int
@@ -297,7 +323,7 @@ ng_pppoe_lb_constructor(node_p node)
 
 /* Receive control message */
 static int
-ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_t lasthook)
+ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 {
 	struct ng_pppoe_lb_private *priv;
 	struct ng_mesg *msg, *resp = NULL;
@@ -334,8 +360,7 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_t lasthook)
 
 		case NGM_PPPOE_LB_GET_STATS: {
 			struct ng_pppoe_lb_stats *stats;
-			MALLOC(resp, struct ng_mesg *, sizeof(*resp) + sizeof(*stats),
-			    M_NETGRAPH, M_NOWAIT | M_ZERO);
+			resp = malloc(sizeof(*resp) + sizeof(*stats), M_NETGRAPH_PPPOE_LB, M_NOWAIT | M_ZERO);
 			if (resp == NULL) {
 				error = ENOMEM;
 				break;
@@ -360,7 +385,7 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_t lasthook)
 		case NGM_PPPOE_LB_GET_MAP: {
 			struct ng_pppoe_lb_map *map_req, *map_resp;
 			struct ng_pppoe_lb_sess_entry *entry;
-			int count, max_entries;
+			int count = 0, max_entries;
 
 			if (msg->header.arglen < sizeof(*map_req)) {
 				error = EINVAL;
@@ -371,10 +396,8 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_t lasthook)
 			if (max_entries > 1024)
 				max_entries = 1024;
 
-			MALLOC(resp, struct ng_mesg *, sizeof(*resp) + sizeof(*map_resp) +
-			    max_entries * sizeof(struct ng_pppoe_lb_map_entry),
-			    M_NETGRAPH, M_NOWAIT | M_ZERO);
-			if (resp == NULL) {
+			map_resp = malloc(sizeof(*map_resp) + max_entries * sizeof(*map_resp->entries), M_NETGRAPH_PPPOE_LB, M_NOWAIT | M_ZERO);
+			if (map_resp == NULL) {
 				error = ENOMEM;
 				break;
 			}

@@ -29,10 +29,20 @@
  */
 
 #ifndef _NETGRAPH_NG_PPPOE_LB_H_
-#define	_NG_NETGRAPH_NG_PPPOE_LB_H_
+#define	_NETGRAPH_NG_PPPOE_LB_H_
+
+#ifndef _KERNEL
+#include <stdint.h>
+#else
+#include <sys/types.h>
+#include <netgraph/netgraph.h>
+#endif
 
 /* Node type name */
 #define NG_PPPOE_LB_NODE_TYPE		"pppoe_lb"
+
+/* Cookie for control messages */
+#define NGM_PPPOE_LB_COOKIE		1089893073
 
 /* Hook names */
 #define NG_PPPOE_LB_HOOK_ETHER		"ether"
@@ -87,12 +97,51 @@ struct ng_pppoe_lb_map {
 
 /* Add worker message */
 struct ng_pppoe_lb_add_worker {
-	char		worker_name[NG_NODESIZ];	/* Worker node name */
+	char		worker_name[64];	/* Worker node name */
 };
 
 /* Remove worker message */
 struct ng_pppoe_lb_remove_worker {
 	int		worker_index;		/* Worker index to remove */
 };
+
+/* Parse type macros for control messages */
+#define NG_PPPOE_LB_ADD_WORKER_TYPE_INFO {		\
+	  { "worker_name",	&ng_parse_string_type },	\
+	  { NULL }						\
+}
+
+#define NG_PPPOE_LB_CONFIG_TYPE_INFO {		\
+	  { "algorithm",	&ng_parse_uint32_type },	\
+	  { "max_workers",	&ng_parse_uint32_type },	\
+	  { "debug_level",	&ng_parse_uint32_type },	\
+	  { NULL }						\
+}
+
+#define NG_PPPOE_LB_STATS_TYPE_INFO {		\
+	  { "packets_in",	&ng_parse_uint64_type },	\
+	  { "packets_out",	&ng_parse_uint64_type },	\
+	  { "sessions_created",	&ng_parse_uint64_type },	\
+	  { "sessions_destroyed",	&ng_parse_uint64_type },	\
+	  { "num_workers",	&ng_parse_uint32_type },	\
+	  { "num_workers_active",	&ng_parse_uint32_type },	\
+	  { "algorithm",	&ng_parse_uint32_type },	\
+	  { "map_count",	&ng_parse_uint32_type },	\
+	  { NULL }						\
+}
+
+#define NG_PPPOE_LB_MAP_ENTRY_TYPE_INFO {	\
+	  { "session_id",	&ng_parse_uint16_type },	\
+	  { "worker_index",	&ng_parse_uint16_type },	\
+	  { "last_activity",	&ng_parse_uint32_type },	\
+	  { NULL }						\
+}
+
+#define NG_PPPOE_LB_MAP_TYPE_INFO {		\
+	  { "count",	&ng_parse_uint32_type },	\
+	  { "max_entries",	&ng_parse_uint32_type },	\
+	  { "entries",	&ng_pppoe_lb_map_entry_array_type },	\
+	  { NULL }						\
+}
 
 #endif /* !_NETGRAPH_NG_PPPOE_LB_H_ */

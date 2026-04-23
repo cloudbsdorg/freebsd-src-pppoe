@@ -71,7 +71,11 @@
 | 2.5 Worker node creation | **COMPLETED** | 2026-04-23 | `libexec/pppoed/pppoed.c` |
 | 2.6 Load balancer setup | **COMPLETED** | 2026-04-23 | `libexec/pppoed/pppoed.c` |
 | 2.7 Graceful shutdown | **COMPLETED** | 2026-04-23 | `libexec/pppoed/pppoed.c` |
-| 2.8-2.14 Documentation/testing | NOT STARTED | | |
+| 2.8 Update pppoed.8 man page | **COMPLETED** | 2026-04-23 | `libexec/pppoed/pppoed.8` |
+| 2.9 Update rc.d/pppoed script | **COMPLETED** | 2026-04-23 | `libexec/rc/rc.d/pppoed` |
+| 2.10 Update rc.conf.5 | **COMPLETED** | 2026-04-23 | `share/man/man5/rc.conf.5` |
+| 2.11 Add rc.conf variables | **COMPLETED** | 2026-04-23 | `rc.conf.5` (pppoed_loadbalancer, pppoed_workers, pppoed_algorithm, pppoed_governor_max) |
+| 2.12-2.14 Testing | NOT STARTED | | |
 
 **Command Line Flags:**
 - `-L`: Enable load balancer mode (default: disabled, backward compatible)
@@ -89,7 +93,8 @@
 | 3.4 `ngctl pppoe_lb map` | **COMPLETED** | 2026-04-23 | `usr.sbin/ngctl/pppoe_lb.c` |
 | 3.5 Update ngctl.h | **COMPLETED** | 2026-04-23 | `usr.sbin/ngctl/ngctl.h` |
 | 3.6 Update ngctl/Makefile | **COMPLETED** | 2026-04-23 | `usr.sbin/ngctl/Makefile` |
-| 3.7-3.13 Documentation | NOT STARTED | | |
+| 3.7 Update ngctl.8 man page | **COMPLETED** | 2026-04-23 | `usr.sbin/ngctl/ngctl.8` |
+| 3.8-3.13 Additional tools | NOT STARTED | | |
 
 ### Phases 4-6: Remaining Work
 
@@ -109,11 +114,18 @@
 
 ### Userland (libexec/)
 - `libexec/pppoed/pppoed.c` (MODIFIED - added -L, -w, -A, -G flags)
+- `libexec/pppoed/pppoed.8` (MODIFIED - documented multithreaded mode, new flags, CPU governor)
+- `libexec/rc/rc.d/pppoed` (MODIFIED - added multithreaded mode support with rc.conf variables)
 
 ### Tools (usr.sbin/)
-- `usr.sbin/ngctl/pppoe_lb.c` (NEW)
-- `usr.sbin/ngctl/ngctl.h` (MODIFIED)
-- `usr.sbin/ngctl/main.c` (MODIFIED)
+- `usr.sbin/ngctl/pppoe_lb.c` (NEW - pppoe_lb subcommands: show, config, stats, map)
+- `usr.sbin/ngctl/ngctl.h` (MODIFIED - added pppoe_lb command declarations)
+- `usr.sbin/ngctl/main.c` (MODIFIED - registered pppoe_lb commands)
+- `usr.sbin/ngctl/ngctl.8` (MODIFIED - documented pppoe_lb subcommands)
+
+### Documentation (share/man/)
+- `share/man/man4/ng_pppoe_lb.4` (NEW - complete kernel module documentation)
+- `share/man/man5/rc.conf.5` (MODIFIED - added MULTITHREADED PPPOE CONFIGURATION section, new variables)
 - `usr.sbin/ngctl/Makefile` (MODIFIED)
 
 ### Tests (tests/)

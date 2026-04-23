@@ -1078,10 +1078,10 @@ This section is the master checklist for implementing multithreaded PPPoE. Each 
 | 2.5 | Implement worker node creation | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.4 | `pppoed.c` | Create N `ng_pppoe` nodes |
 | 2.6 | Implement load balancer setup | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.5 | `pppoed.c` | Create `ng_pppoe_lb`, connect workers |
 | 2.7 | Implement graceful shutdown | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.6 | `pppoed.c` | Drain sessions, disconnect, cleanup |
-| 2.8 | Update `pppoed.8` man page | NOT STARTED | | | | 2.3 | `pppoed.8` | Document new flags |
-| 2.9 | Update `libexec/rc/rc.d/pppoed` | NOT STARTED | | | | 2.1 | `rc.d/pppoed` | Handle `pppoed_workers`, `pppoed_loadbalancer` |
-| 2.10 | Update `libexec/rc/rc.conf` defaults | NOT STARTED | | | | 2.9 | `rc.conf` | Add commented-out examples |
-| 2.11 | Add `pppoed_max_workers` rc.conf variable | NOT STARTED | | | | 2.4 | `rc.conf` | Governor hard cap for startup script |
+| 2.8 | Update `pppoed.8` man page | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.3 | `pppoed.8` | Document new flags `-L`, `-w`, `-A`, `-G`, multithreaded mode, CPU governor |
+| 2.9 | Update `libexec/rc/rc.d/pppoed` | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.1 | `rc.d/pppoed` | Handle `pppoed_workers`, `pppoed_loadbalancer`, `pppoed_algorithm`, `pppoed_governor_max` |
+| 2.10 | Update `libexec/rc/rc.conf` defaults | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.9 | `rc.conf.5` | Added `pppoed_loadbalancer`, `pppoed_workers`, `pppoed_algorithm`, `pppoed_governor_max` variables |
+| 2.11 | Add `pppoed_max_workers` rc.conf variable | COMPLETED | | 2026-04-23 | 2026-04-23 | 2.4 | `rc.conf.5` | Governor hard cap for startup script (via `pppoed_governor_max`) |
 | 2.12 | Test `pppoed` in single-worker mode | NOT STARTED | | | | 2.8 | | Must behave identically to before |
 | 2.13 | Test `pppoed` in multi-worker mode | NOT STARTED | | | | 2.12 | | Verify session distribution |
 | 2.14 | Test `pppoed` with governor enabled | NOT STARTED | | | | 2.13 | | Verify `-G` cap respected |
@@ -1096,7 +1096,7 @@ This section is the master checklist for implementing multithreaded PPPoE. Each 
 | 3.4 | Add `ngctl pppoe_lb map` command | COMPLETED | | 2026-04-23 | 2026-04-23 | 3.1 | `usr.sbin/ngctl/pppoe_lb.c` | Display session-to-worker mapping |
 | 3.5 | Update `ngctl.h` for new commands | COMPLETED | | 2026-04-23 | 2026-04-23 | 3.1 | `usr.sbin/ngctl/ngctl.h` | Declare new command structs |
 | 3.6 | Update `ngctl/Makefile` | COMPLETED | | 2026-04-23 | 2026-04-23 | 3.1 | `usr.sbin/ngctl/Makefile` | Add pppoe_lb.c to SRCS |
-| 3.7 | Update `ngctl.8` man page | NOT STARTED | | | | 3.2 | `ngctl.8` | Document new subcommands |
+| 3.7 | Update `ngctl.8` man page | COMPLETED | | 2026-04-23 | 2026-04-23 | 3.2 | `ngctl.8` | Document `pppoe_lb show`, `config`, `stats`, `map` subcommands |
 | 3.8 | Add `netstat -W` flag | NOT STARTED | | | | 1.5 | `netstat.c` | Query `NGM_PPPOE_LB_GET_STATS` |
 | 3.9 | Update `netstat.1` man page | NOT STARTED | | | | 3.8 | `netstat.1` | Document `-W` flag |
 | 3.10 | Add `ifconfig pppoe_workers` option | NOT STARTED | | | | 1.5 | `ifconfig.c` | Get/set worker count |
@@ -1126,7 +1126,7 @@ This section is the master checklist for implementing multithreaded PPPoE. Each 
 
 | # | Task | Status | Owner | Start | End | Dependencies | Files | Notes |
 |---|------|--------|-------|-------|-----|--------------|-------|-------|
-| 6.1 | Write `ng_pppoe_lb.4` man page | NOT STARTED | | | | 1.18 | `ng_pppoe_lb.4` | Kernel node documentation |
+| 6.1 | Write `ng_pppoe_lb.4` man page | COMPLETED | | 2026-04-23 | 2026-04-23 | 1.18 | `ng_pppoe_lb.4` | Complete kernel node documentation with hooks, control messages, algorithms, governor, sysctl variables, examples |
 | 6.2 | Update `ng_pppoe.4` man page | NOT STARTED | | | | 1.18 | `ng_pppoe.4` | Mention load balancer integration |
 | 6.3 | Update `RELNOTES` | NOT STARTED | | | | 2.11 | `RELNOTES` | Summarize feature for release |
 | 6.4 | Update `UPDATING` | NOT STARTED | | | | 2.11 | `UPDATING` | Any admin-visible changes |
