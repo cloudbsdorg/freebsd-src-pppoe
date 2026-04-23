@@ -600,6 +600,18 @@ ngctl show pppoe_lb:
 | `net.graph.pppoe_lb.algorithm` | int | 0 | 0=round-robin, 1=hash, 2=least-loaded |
 | `net.graph.pppoe_lb.session_map_size` | int | 1024 | Session map hash table size |
 | `net.graph.pppoe_lb.debug` | int | 0 | Debug level |
+| `net.graph.pppoe_lb.governor.enabled` | int | 0 | Enable CPU governor (0=disabled, 1=enabled) |
+| `net.graph.pppoe_lb.governor.max_workers` | int | 0 | Max workers (0=unlimited, otherwise hard cap) |
+| `net.graph.pppoe_lb.governor.cpu_threshold` | int | 80 | CPU % threshold to spawn more workers |
+| `net.graph.pppoe_lb.governor.cpu_low_threshold` | int | 30 | CPU % threshold to reduce workers |
+| `net.graph.pppoe_lb.governor.scale_up_interval` | int | 10 | Seconds between scale-up checks |
+| `net.graph.pppoe_lb.governor.scale_down_interval` | int | 60 | Seconds between scale-down checks |
+
+**Governor Behavior:**
+- When `governor.enabled=1`, the load balancer monitors per-worker CPU usage via kernel statistics.
+- If average worker CPU exceeds `cpu_threshold` for `scale_up_interval` seconds, and `max_workers` not reached, a new worker is spawned.
+- If average worker CPU drops below `cpu_low_threshold` for `scale_down_interval` seconds, and more than 1 worker exists, a worker is drained and removed.
+- `max_workers=0` means no hard cap (up to `mp_ncpus`). Setting `max_workers=4` on an 8-core system limits workers to 4 regardless of load.
 
 ---
 
@@ -1003,7 +1015,121 @@ echo "PASS: No memory issues detected"
 
 ---
 
-## 11. Future Enhancements
+## 11. TODO — Step-by-Step Implementation Tracker
+
+This section is the master checklist for implementing multithreaded PPPoE. Each task includes:
+- **Status:** `NOT STARTED` | `IN PROGRESS` | `COMPLETED`
+- **Owner:** Who is working on it
+- **Start Date:** When work began
+- **End Date:** When work finished
+- **Dependencies:** What must be done first
+- **Files Modified:** What files are touched
+- **Notes:** Any blockers, decisions, or context
+
+### Phase 0: Foundation and Setup
+
+| # | Task | Status | Owner | Start | End | Dependencies | Files | Notes |
+|---|------|--------|-------|-------|-----|--------------|-------|-------|
+| 0.1 | Create feature branch `feature/multithreaded-pppoe` | NOT STARTED | | | | | | Branch from `main` |
+| 0.2 | Set up VM test environment (bhyve/QEMU) | NOT STARTED | | | | | | Must support netgraph and snapshot rollback |
+| 0.3 | Verify existing PPPoE tests pass on clean branch | NOT STARTED | | | | 0.2 | | Baseline before any changes |
+| 0.4 | Document baseline performance (single-threaded) | NOT STARTED | | | | 0.3 | | Packets/sec, latency, CPU usage |
+
+### Phase 1: Kernel Load Balancer Node (`ng_pppoe_lb`)
+
+| # | Task | Status | Owner | Start | End | Dependencies | Files | Notes |
+|---|------|--------|-------|-------|-----|--------------|-------|-------|
+| 1.1 | Create `sys/netgraph/ng_pppoe_lb.h` header | NOT STARTED | | | | 0.1 | `ng_pppoe_lb.h` | Define node type, messages, private data |
+| 1.2 | Create `sys/netgraph/ng_pppoe_lb.c` core | NOT STARTED | | | | 1.1 | `ng_pppoe_lb.c` | Node constructor, destructor, hook management |
+| 1.3 | Implement packet distribution logic | NOT STARTED | | | | 1.2 | `ng_pppoe_lb.c` | Discovery → round-robin, Session → hash |
+| 1.4 | Implement session map (hash table) | NOT STARTED | | | | 1.3 | `ng_pppoe_lb.c` | Locking, aging, cleanup |
+| 1.5 | Implement control messages (NGM_PPPOE_LB_*) | NOT STARTED | | | | 1.2 | `ng_pppoe_lb.c` | Add worker, remove worker, get stats, get map |
+| 1.6 | Add sysctl variables | NOT STARTED | | | | 1.2 | `ng_pppoe_lb.c` | `net.graph.pppoe_lb.*` |
+| 1.7 | Add KLD module support | NOT STARTED | | | | 1.2 | `ng_pppoe_lb.c` | `MOD_LOAD`/`MOD_UNLOAD` handlers |
+| 1.8 | Update `sys/netgraph/Makefile` | NOT STARTED | | | | 1.1 | `Makefile` | Add `ng_pppoe_lb.o` |
+| 1.9 | Create `sys/modules/netgraph/ng_pppoe_lb/` | NOT STARTED | | | | 1.8 | `Makefile`, `ng_pppoe_lb.c` | KLD module build |
+| 1.10 | Write unit tests (user-mode mock) | NOT STARTED | | | | 1.3 | `tests/netgraph/ng_pppoe_lb_test.c` | No kernel code loaded |
+| 1.11 | Run unit tests | NOT STARTED | | | | 1.10 | | Must pass before proceeding |
+| 1.12 | Write integration test script (VM-based) | NOT STARTED | | | | 1.9 | `tests/netgraph/ng_pppoe_lb_vm_test.sh` | Loads module inside VM only |
+| 1.13 | Run integration tests | NOT STARTED | | | | 1.12 | | Verify topology creation, stats, cleanup |
+| 1.14 | Write performance test harness | NOT STARTED | | | | 1.9 | `tests/netgraph/ng_pppoe_lb_perf.c` | VM with dedicated vCPUs |
+| 1.15 | Run performance tests | NOT STARTED | | | | 1.14 | | Measure 1, 2, 4, 8 worker throughput |
+| 1.16 | Write stress test harness | NOT STARTED | | | | 1.9 | `tests/netgraph/ng_pppoe_lb_stress.sh` | VM with resource limits |
+| 1.17 | Run stress tests | NOT STARTED | | | | 1.16 | | 5-minute run, check for leaks |
+| 1.18 | Implement CPU governor thread | NOT STARTED | | | | 1.6 | `ng_pppoe_lb.c` | Monitors CPU, scales workers up/down |
+| 1.19 | Implement worker hot-add (scale up) | NOT STARTED | | | | 1.18 | `ng_pppoe_lb.c` | Create new ng_pppoe node, connect to LB |
+| 1.20 | Implement worker hot-remove (scale down) | NOT STARTED | | | | 1.19 | `ng_pppoe_lb.c` | Drain sessions, disconnect, destroy node |
+| 1.21 | Add governor sysctl handlers | NOT STARTED | | | | 1.18 | `ng_pppoe_lb.c` | `governor.enabled`, `max_workers`, thresholds |
+| 1.22 | Test governor scale-up under load | NOT STARTED | | | | 1.19 | | Verify new worker spawned when CPU high |
+| 1.23 | Test governor scale-down under low load | NOT STARTED | | | | 1.20 | | Verify worker removed when CPU low |
+| 1.24 | Test max_workers hard cap | NOT STARTED | | | | 1.21 | | Verify no more than max_workers created |
+| 1.25 | Code review and cleanup | NOT STARTED | | | | 1.24 | | Style, comments, locking correctness |
+
+### Phase 2: Userland Daemon (`pppoed`)
+
+| # | Task | Status | Owner | Start | End | Dependencies | Files | Notes |
+|---|------|--------|-------|-------|-----|--------------|-------|-------|
+| 2.1 | Add `-w <workers>` flag parsing | NOT STARTED | | | | 1.1 | `pppoed.c` | Default 1 (backward compatible) |
+| 2.2 | Add `-L` flag parsing | NOT STARTED | | | | 2.1 | `pppoed.c` | Enable load balancer |
+| 2.3 | Add `-A <algorithm>` flag parsing | NOT STARTED | | | | 2.2 | `pppoed.c` | round-robin, hash, least-loaded |
+| 2.4 | Add `-G <max_workers>` flag parsing | NOT STARTED | | | | 2.3 | `pppoed.c` | Governor hard cap (0=unlimited) |
+| 2.5 | Implement worker node creation | NOT STARTED | | | | 2.4 | `pppoed.c` | Create N `ng_pppoe` nodes |
+| 2.6 | Implement load balancer setup | NOT STARTED | | | | 2.5 | `pppoed.c` | Create `ng_pppoe_lb`, connect workers |
+| 2.7 | Implement graceful shutdown | NOT STARTED | | | | 2.6 | `pppoed.c` | Drain sessions, disconnect, cleanup |
+| 2.8 | Update `pppoed.8` man page | NOT STARTED | | | | 2.3 | `pppoed.8` | Document new flags |
+| 2.9 | Update `libexec/rc/rc.d/pppoed` | NOT STARTED | | | | 2.1 | `rc.d/pppoed` | Handle `pppoed_workers`, `pppoed_loadbalancer` |
+| 2.10 | Update `libexec/rc/rc.conf` defaults | NOT STARTED | | | | 2.9 | `rc.conf` | Add commented-out examples |
+| 2.11 | Add `pppoed_max_workers` rc.conf variable | NOT STARTED | | | | 2.4 | `rc.conf` | Governor hard cap for startup script |
+| 2.12 | Test `pppoed` in single-worker mode | NOT STARTED | | | | 2.8 | | Must behave identically to before |
+| 2.13 | Test `pppoed` in multi-worker mode | NOT STARTED | | | | 2.12 | | Verify session distribution |
+| 2.14 | Test `pppoed` with governor enabled | NOT STARTED | | | | 2.13 | | Verify `-G` cap respected |
+
+### Phase 3: Monitoring and Diagnostics
+
+| # | Task | Status | Owner | Start | End | Dependencies | Files | Notes |
+|---|------|--------|-------|-------|-----|--------------|-------|-------|
+| 3.1 | Add `ngctl show pppoe_lb` command | NOT STARTED | | | | 1.5 | `ngctl.c` | Display stats, workers, algorithm |
+| 3.2 | Add `ngctl pppoe_lb config` command | NOT STARTED | | | | 3.1 | `ngctl.c` | Runtime reconfiguration |
+| 3.3 | Update `ngctl.8` man page | NOT STARTED | | | | 3.2 | `ngctl.8` | Document new subcommands |
+| 3.4 | Add `netstat -W` flag | NOT STARTED | | | | 1.5 | `netstat.c` | Query `NGM_PPPOE_LB_GET_STATS` |
+| 3.5 | Update `netstat.1` man page | NOT STARTED | | | | 3.4 | `netstat.1` | Document `-W` flag |
+| 3.6 | Add `ifconfig pppoe_workers` option | NOT STARTED | | | | 1.5 | `ifconfig.c` | Get/set worker count |
+| 3.7 | Update `ifconfig.8` man page | NOT STARTED | | | | 3.6 | `ifconfig.8` | Document option |
+| 3.8 | Add `pppctl show pppoe lb` command | NOT STARTED | | | | 3.1 | `pppctl.c` | Client-side diagnostics |
+| 3.9 | Update `pppctl.8` man page | NOT STARTED | | | | 3.8 | `pppctl.8` | Document new command |
+
+### Phase 4: PPP Daemon (`ppp`) Client-Side
+
+| # | Task | Status | Owner | Start | End | Dependencies | Files | Notes |
+|---|------|--------|-------|-------|-----|--------------|-------|-------|
+| 4.1 | Add `set pppoe workers <n>` command | NOT STARTED | | | | 1.1 | `command.c` | Client-side hint |
+| 4.2 | Add `show pppoe workers` command | NOT STARTED | | | | 4.1 | `command.c` | Display worker info |
+| 4.3 | Update `ether.c` for load balancer messages | NOT STARTED | | | | 1.5 | `ether.c` | Handle `NGM_PPPOE_LB_GET_STATS` |
+| 4.4 | Update `ppp.8` man page | NOT STARTED | | | | 4.2 | `ppp.8` | Document new commands |
+
+### Phase 5: Optional Per-Session Locking in `ng_pppoe`
+
+| # | Task | Status | Owner | Start | End | Dependencies | Files | Notes |
+|---|------|--------|-------|-------|-----|--------------|-------|-------|
+| 5.1 | Add per-session `struct mtx` to `sess_con` | NOT STARTED | | | | 1.18 | `ng_pppoe.c` | Higher risk; defer until Phase 1-2 stable |
+| 5.2 | Replace node-level serialization with per-session locks | NOT STARTED | | | | 5.1 | `ng_pppoe.c` | Data path only |
+| 5.3 | Test for deadlocks and race conditions | NOT STARTED | | | | 5.2 | | Extensive stress testing required |
+| 5.4 | Benchmark performance improvement | NOT STARTED | | | | 5.3 | | Compare to Phase 1-2 results |
+
+### Phase 6: Documentation and Release
+
+| # | Task | Status | Owner | Start | End | Dependencies | Files | Notes |
+|---|------|--------|-------|-------|-----|--------------|-------|-------|
+| 6.1 | Write `ng_pppoe_lb.4` man page | NOT STARTED | | | | 1.18 | `ng_pppoe_lb.4` | Kernel node documentation |
+| 6.2 | Update `ng_pppoe.4` man page | NOT STARTED | | | | 1.18 | `ng_pppoe.4` | Mention load balancer integration |
+| 6.3 | Update `RELNOTES` | NOT STARTED | | | | 2.11 | `RELNOTES` | Summarize feature for release |
+| 6.4 | Update `UPDATING` | NOT STARTED | | | | 2.11 | `UPDATING` | Any admin-visible changes |
+| 6.5 | Final code review | NOT STARTED | | | | 6.4 | | All phases complete |
+| 6.6 | Merge to `main` | NOT STARTED | | | | 6.5 | | After approval |
+
+---
+
+## 12. Future Enhancements
 
 1. **Dynamic worker scaling:** Add/remove workers based on load
 2. **Per-worker CPU affinity:** Pin workers to specific CPU cores
@@ -1014,7 +1140,7 @@ echo "PASS: No memory issues detected"
 
 ---
 
-## 12. Conclusion
+## 13. Conclusion
 
 The recommended approach of adding a load balancer node (`ng_pppoe_lb`) in front of multiple `ng_pppoe` worker nodes provides:
 
