@@ -112,7 +112,7 @@ PppoeLbShowCmd(int ac, char **av)
 		return (CMDRTN_ERROR);
 	}
 
-	if (NgRecvMsg(csock, &resp, NULL) < 0) {
+	if (NgRecvMsg(csock, resp, sizeof(rbuf), NULL) < 0) {
 		warn("recv stats msg");
 		return (CMDRTN_ERROR);
 	}
@@ -251,7 +251,7 @@ PppoeLbStatsCmd(int ac, char **av)
 		return (CMDRTN_ERROR);
 	}
 
-	if (NgRecvMsg(csock, &resp, NULL) < 0) {
+	if (NgRecvMsg(csock, resp, sizeof(rbuf), NULL) < 0) {
 		warn("recv stats msg");
 		return (CMDRTN_ERROR);
 	}
@@ -328,7 +328,7 @@ PppoeLbMapCmd(int ac, char **av)
 		return (CMDRTN_ERROR);
 	}
 
-	if (NgRecvMsg(csock, &resp, NULL) < 0) {
+	if (NgRecvMsg(csock, resp, sizeof(rbuf), NULL) < 0) {
 		warn("recv map msg");
 		return (CMDRTN_ERROR);
 	}
