@@ -294,6 +294,10 @@ static int get_sessions(struct session_info **sessions_out, int max_sessions) {
     return count;
 }
 
+/* Forward declarations for session tracking */
+static void track_session(uint64_t session_id, int worker_id);
+static int get_drift_count(void);
+
 /* Get worker information */
 static int get_workers(struct worker_info **workers_out) {
     int count = sysctl_int("governor.active_workers");
@@ -493,6 +497,9 @@ static void print_sessions(void) {
         time_t age = time(NULL) - sessions[i].created;
         format_duration(age, age_buf, sizeof(age_buf));
         
+        /* Track session for drift detection */
+        track_session(sessions[i].session_id, sessions[i].worker_id);
+        
         printf("  %-12s  ", "");
         if (USE_COLOR) printf("%s", COLOR_CYAN);
         printf("0x%lx", (unsigned long)sessions[i].session_id);
@@ -519,6 +526,18 @@ static void print_sessions(void) {
     }
     
     printf("\n");
+    
+    /* Show affinity drift summary if any */
+    int drifts = get_drift_count();
+    if (drifts > 0) {
+        printf("  ");
+        if (USE_COLOR) printf("%s", COLOR_YELLOW);
+        printf("Note: %d session(s) have changed workers since monitoring started.\n", drifts);
+        if (USE_COLOR) printf("%s", COLOR_RESET);
+        printf("       This may indicate governor scaling activity or affinity issues.\n");
+        printf("\n");
+    }
+    
     free(sessions);
 }
 
@@ -632,8 +651,125 @@ static int calculate_health_score(void) {
     return (worker_score + balance_score + error_score) / 3;
 }
 
+/* Track session assignments for drift detection */
+#define MAX_TRACKED_SESSIONS 1000
+static struct {
+    uint64_t session_id;
+    int expected_worker;
+    time_t first_seen;
+    int drift_count;
+} session_tracker[MAX_TRACKED_SESSIONS];
+static int tracked_count = 0;
+
+static void print_component_score(const char *name, int score, int extra, int threshold) {
+    if (score >= 90) {
+        if (USE_COLOR) printf("%s", COLOR_GREEN);
+    } else if (score >= 70) {
+        if (USE_COLOR) printf("%s", COLOR_YELLOW);
+    } else {
+        if (USE_COLOR) printf("%s", COLOR_RED);
+    }
+    printf("%d/100", score);
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    printf(" %s", name);
+    if (extra > 0) {
+        printf(" (%d workers)", extra);
+    }
+    if (threshold > 0) {
+        printf(" [threshold: %d%%]", threshold);
+    }
+    printf("\n");
+}
+
+static void track_session(uint64_t session_id, int worker_id) {
+    /* Look for existing entry */
+    for (int i = 0; i < tracked_count; i++) {
+        if (session_tracker[i].session_id == session_id) {
+            /* Check for drift */
+            if (session_tracker[i].expected_worker != worker_id && session_tracker[i].expected_worker >= 0) {
+                session_tracker[i].drift_count++;
+                if (config.verbose && session_tracker[i].drift_count == 1) {
+                    printf("  [AFFINITY] Session 0x%lx drifted: worker %d -> %d\n",
+                           (unsigned long)session_id, session_tracker[i].expected_worker, worker_id);
+                }
+            }
+            session_tracker[i].expected_worker = worker_id;
+            return;
+        }
+    }
+    
+    /* Add new entry */
+    if (tracked_count < MAX_TRACKED_SESSIONS) {
+        session_tracker[tracked_count].session_id = session_id;
+        session_tracker[tracked_count].expected_worker = worker_id;
+        session_tracker[tracked_count].first_seen = time(NULL);
+        session_tracker[tracked_count].drift_count = 0;
+        tracked_count++;
+    }
+}
+
+static int get_drift_count(void) {
+    int count = 0;
+    for (int i = 0; i < tracked_count; i++) {
+        if (session_tracker[i].drift_count > 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
 static void print_health_score(void) {
     int score = calculate_health_score();
+    struct worker_info *workers = NULL;
+    int worker_count = get_workers(&workers);
+    struct governor_status gov;
+    get_governor_status(&gov);
+    
+    /* Calculate component scores */
+    int worker_score = 50, balance_score = 50, error_score = 50, affinity_score = 100;
+    
+    if (worker_count > 0) {
+        int active = 0;
+        for (int i = 0; i < worker_count; i++) {
+            if (workers[i].state == WORKER_ACTIVE) active++;
+        }
+        worker_score = (active * 100) / worker_count;
+        
+        int total_sessions = 0;
+        for (int i = 0; i < worker_count; i++) {
+            total_sessions += workers[i].sessions;
+        }
+        int ideal = worker_count > 0 ? total_sessions / worker_count : 0;
+        int max_dev = 0;
+        for (int i = 0; i < worker_count; i++) {
+            int dev = abs(workers[i].sessions - ideal);
+            int pct = ideal > 0 ? (dev * 100) / ideal : 0;
+            if (pct > max_dev) max_dev = pct;
+        }
+        balance_score = (max_dev <= config.imbalance_threshold) ? 100 : 100 - max_dev;
+        
+        int total_errors = 0;
+        uint64_t total_bytes = 0;
+        for (int i = 0; i < worker_count; i++) {
+            total_errors += workers[i].errors;
+            total_bytes += workers[i].bytes_in + workers[i].bytes_out;
+        }
+        double error_rate = total_bytes > 0 ? (double)total_errors / total_bytes * 1000000 : 0;
+        if (error_rate < 0.001) error_score = 100;
+        else if (error_rate < 0.01) error_score = 80;
+        else if (error_rate < 0.1) error_score = 50;
+        else error_score = 10;
+    }
+    
+    /* Affinity score */
+    int drifts = get_drift_count();
+    if (drifts == 0) affinity_score = 100;
+    else if (drifts <= 2) affinity_score = 90;
+    else if (drifts <= 5) affinity_score = 70;
+    else if (drifts <= 10) affinity_score = 50;
+    else affinity_score = 30;
+    
+    free(workers);
     
     print_header("Health Assessment");
     
@@ -663,25 +799,67 @@ static void print_health_score(void) {
     if (USE_COLOR) printf("%s", COLOR_RESET);
     printf("\n\n");
     
+    /* Component breakdown */
+    printf("  ");
+    if (USE_COLOR) printf("%s", COLOR_BOLD);
+    printf("Component Scores:\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    
+    printf("  ");
+    print_component_score("Worker Availability", worker_score, worker_count > 0 ? worker_count : 0, 0);
+    printf("  ");
+    print_component_score("Load Distribution", balance_score, 0, config.imbalance_threshold);
+    printf("  ");
+    print_component_score("Error Rate", error_score, 0, 0);
+    printf("  ");
+    print_component_score("Session Affinity", affinity_score, drifts, 0);
+    printf("\n");
+    
     if (score >= 90) {
         printf("  ");
         if (USE_COLOR) printf("%s", COLOR_GREEN);
         printf("Status: HEALTHY");
         if (USE_COLOR) printf("%s", COLOR_RESET);
-        printf(" - System operating normally.\n\n");
+        printf(" - System operating normally.\n");
     } else if (score >= 70) {
         printf("  ");
         if (USE_COLOR) printf("%s", COLOR_YELLOW);
         printf("Status: WARNING");
         if (USE_COLOR) printf("%s", COLOR_RESET);
-        printf(" - Some metrics need attention.\n\n");
+        printf(" - Some metrics need attention.\n");
     } else {
         printf("  ");
         if (USE_COLOR) printf("%s", COLOR_RED);
         printf("Status: CRITICAL");
         if (USE_COLOR) printf("%s", COLOR_RESET);
-        printf(" - Immediate attention required.\n\n");
+        printf(" - Immediate attention required.\n");
     }
+    
+    /* Recommendations */
+    if (balance_score < 80) {
+        printf("\n  ");
+        if (USE_COLOR) printf("%s", COLOR_YELLOW);
+        printf("Recommendation: ");
+        if (USE_COLOR) printf("%s", COLOR_RESET);
+        printf("Check worker session distribution and algorithm settings.\n");
+        printf("             Run: pppoetest diagnose --check-balance for details.\n");
+    }
+    if (error_score < 80) {
+        printf("\n  ");
+        if (USE_COLOR) printf("%s", COLOR_YELLOW);
+        printf("Recommendation: ");
+        if (USE_COLOR) printf("%s", COLOR_RESET);
+        printf("Check worker error counts with pppoetest diagnose -s.\n");
+    }
+    if (affinity_score < 80) {
+        printf("\n  ");
+        if (USE_COLOR) printf("%s", COLOR_YELLOW);
+        printf("Recommendation: ");
+        if (USE_COLOR) printf("%s", COLOR_RESET);
+        printf("Session affinity violations detected. Check governor scaling.\n");
+        printf("             Run with --check-affinity to track session movements.\n");
+    }
+    printf("\n");
 }
 
 static void print_balance_check(void) {
@@ -850,7 +1028,24 @@ static void run_monitoring(void) {
         
         free(workers);
         
-        printf("\n  Updating in %d seconds...\n", config.interval);
+        /* Track sessions for drift detection */
+        struct session_info *sessions = NULL;
+        int session_count = get_sessions(&sessions, 1000);
+        for (int i = 0; i < session_count; i++) {
+            track_session(sessions[i].session_id, sessions[i].worker_id);
+        }
+        free(sessions);
+        
+        /* Show drift info */
+        int drifts = get_drift_count();
+        if (drifts > 0) {
+            printf("\n  ");
+            if (USE_COLOR) printf("%s", COLOR_YELLOW);
+            printf("! %d session(s) have changed workers", drifts);
+            if (USE_COLOR) printf("%s", COLOR_RESET);
+        }
+        
+        printf("\n\n  Updating in %d seconds...\n", config.interval);
         
         /* Sleep with interruptible sleep */
         struct timespec tspec = { .tv_sec = config.interval, .tv_nsec = 0 };
