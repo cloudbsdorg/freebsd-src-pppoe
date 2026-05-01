@@ -1,0 +1,53 @@
+#-
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Copyright (c) 2024 Mark LaPointe <mark@cloudbsd.org>
+#
+# Test accounts for PPPoE Load Balancer authentication testing
+#
+# This file contains test user accounts for testing PPPoE
+# authentication with PAP and CHAP.
+#
+# INSTALLATION:
+#   Copy this file to /etc/ppp/pap-secrets and /etc/ppp/chap-secrets
+#   and ensure proper permissions:
+#     chmod 600 /etc/ppp/pap-secrets
+#     chmod 600 /etc/ppp/chap-secrets
+#
+# TEST USERS:
+#   testuser_pap    - For PAP authentication testing
+#   testuser_chap   - For CHAP authentication testing
+#   testuser_both   - For both PAP and CHAP testing
+#   testuser_expire - For testing expired accounts
+#
+# PASSWORD: "testpass" for all test accounts
+#
+# Lines format:
+#   username  *  password  IP_address_or_*
+#
+# Wildcard (*) means any remote IP address is allowed.
+# For testing, use IP addresses from the 10.0.0.0/8 range.
+
+###############################################################################
+# PAP Secrets (for PAP authentication)
+###############################################################################
+# Format: username  *  password  *
+testuser_pap       *  testpass  *
+testuser_both      *  testpass  *
+
+###############################################################################
+# CHAP Secrets (for CHAP authentication)
+###############################################################################
+# Format: username  *  password  *
+testuser_chap      *  testpass  *
+testuser_both      *  testpass  *
+
+###############################################################################
+# RADIUS Test Accounts (if RADIUS is configured)
+###############################################################################
+# For testing with RADIUS, configure /etc/ppp/ppp.conf with:
+#   set authname testuser_radius
+#   set authkey testpass
+#
+# RADIUS server configuration should include:
+#   testuser_radius   NAS-IP-Address  testpass  10.0.0.0/8

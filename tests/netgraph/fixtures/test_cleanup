@@ -1,0 +1,60 @@
+#!/bin/sh
+#-
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Copyright (c) 2024 Mark LaPointe <mark@cloudbsd.org>
+#
+# Test fixture cleanup script for PPPoE Load Balancer tests
+#
+# This script cleans up any test nodes and resets sysctl values
+# to defaults. Should be called at the end of tests.
+#
+# Usage:
+#   ./test_cleanup [node_name]
+#
+# Or call without arguments to clean up all test nodes:
+#   ./test_cleanup --all
+
+PREFIX="net.graph.pppoe_lb"
+
+cleanup_node() {
+    local node="$1"
+    
+    if [ -z "$node" ]; then
+        return 0
+    fi
+    
+    echo "Cleaning up node: $node"
+    
+    # Shutdown the node
+    ngctl shutdown "$node:" 2>/dev/null || true
+    
+    # Wait for cleanup
+    sleep 0.5
+}
+
+cleanup_all() {
+    echo "Cleaning up all PPPoE LB test nodes..."
+    
+    # Find and cleanup any test nodes
+    for node in $(ngctl list 2>/dev/null | grep -E "pppoe_lb_test|pppoe_lb_2worker|pppoe_lb_governor|ng_pppoe_lb_int" | awk '{print $1}' | tr -d ':'); do
+        cleanup_node "$node"
+    done
+    
+    # Reset sysctl values to defaults
+    echo "Resetting sysctl values..."
+    sysctl "${PREFIX}.governor.enabled=0" 2>/dev/null || true
+    sysctl "${PREFIX}.governor.min_workers=1" 2>/dev/null || true
+    sysctl "${PREFIX}.governor.max_workers=0" 2>/dev/null || true
+    sysctl "${PREFIX}.governor.cpu_threshold=80" 2>/dev/null || true
+    sysctl "${PREFIX}.governor.cpu_low_threshold=30" 2>/dev/null || true
+    
+    echo "Cleanup complete."
+}
+
+# Main
+if [ "$1" = "--all" ] || [ -z "$1" ]; then
+    cleanup_all
+else
+    cleanup_node "$1"
+fi

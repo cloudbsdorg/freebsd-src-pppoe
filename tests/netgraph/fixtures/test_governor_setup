@@ -1,0 +1,51 @@
+#!/bin/sh
+#-
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Copyright (c) 2024 Mark LaPointe <mark@cloudbsd.org>
+#
+# Governor-enabled setup fixture for PPPoE Load Balancer tests
+#
+# This script sets up a netgraph configuration with the governor
+# auto-scaling enabled for testing governor behavior.
+#
+# Usage:
+#   ./test_governor_setup [node_name]
+#
+# Variables set after running:
+#   TEST_NODE - Name of created node
+#   TEST_GOVERNOR_ENABLED - Set to "1"
+#   TEST_CLEANUP_REQUIRED - Set to "yes" if cleanup needed
+
+set -e
+
+# Configuration
+NODE_NAME="${1:-pppoe_lb_governor_test}"
+PREFIX="net.graph.pppoe_lb"
+
+echo "Setting up governor-enabled PPPoE LB fixture..."
+
+# Create the netgraph node
+ngctl mkpeer . pppoe_lb lb "$NODE_NAME"
+
+# Wait for node to be ready
+sleep 0.5
+
+# Configure governor
+sysctl "${PREFIX}.governor.enabled=1" 2>/dev/null || true
+sysctl "${PREFIX}.governor.min_workers=1" 2>/dev/null || true
+sysctl "${PREFIX}.governor.max_workers=4" 2>/dev/null || true
+sysctl "${PREFIX}.governor.cpu_threshold=80" 2>/dev/null || true
+sysctl "${PREFIX}.governor.cpu_low_threshold=30" 2>/dev/null || true
+
+# Verify node was created
+if ngctl list 2>/dev/null | grep -q "$NODE_NAME"; then
+    echo "Node created successfully with governor enabled: $NODE_NAME"
+    export TEST_NODE="$NODE_NAME"
+    export TEST_GOVERNOR_ENABLED="1"
+    export TEST_CLEANUP_REQUIRED="yes"
+    exit 0
+else
+    echo "ERROR: Failed to create node: $NODE_NAME"
+    exit 1
+fi

@@ -3,8 +3,6 @@
 
 PROG=	pppoetest
 SRCS=	pppoetest.c
-
-# MAN=	pppoetest.8
+MAN8=	pppoetest.8
 
 .include <bsd.prog.mk>
-# .include <bsd.man.mk>

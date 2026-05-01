@@ -1,0 +1,51 @@
+#!/bin/sh
+#-
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Copyright (c) 2024 Mark LaPointe <mark@cloudbsd.org>
+#
+# Two-worker setup fixture for PPPoE Load Balancer tests
+#
+# This script sets up a netgraph configuration with 2 workers
+# for use in load distribution tests.
+#
+# Usage:
+#   ./test_2worker_setup [node_name]
+#
+# Variables set after running:
+#   TEST_NODE - Name of created node
+#   TEST_WORKER_COUNT - Number of workers (2)
+#   TEST_CLEANUP_REQUIRED - Set to "yes" if cleanup needed
+
+set -e
+
+# Configuration
+NODE_NAME="${1:-pppoe_lb_2worker_test}"
+
+echo "Setting up 2-worker PPPoE LB fixture..."
+
+# Create the netgraph node
+ngctl mkpeer . pppoe_lb lb "$NODE_NAME"
+
+# Wait for node to be ready
+sleep 0.5
+
+# Add first worker
+ngctl msg "$NODE_NAME:" pppoe_lb addworker 2>/dev/null || true
+sleep 0.2
+
+# Add second worker
+ngctl msg "$NODE_NAME:" pppoe_lb addworker 2>/dev/null || true
+sleep 0.2
+
+# Verify node was created
+if ngctl list 2>/dev/null | grep -q "$NODE_NAME"; then
+    echo "Node created successfully with 2 workers: $NODE_NAME"
+    export TEST_NODE="$NODE_NAME"
+    export TEST_WORKER_COUNT="2"
+    export TEST_CLEANUP_REQUIRED="yes"
+    exit 0
+else
+    echo "ERROR: Failed to create node: $NODE_NAME"
+    exit 1
+fi
