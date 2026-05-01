@@ -27,22 +27,16 @@
 # governor_auto		- CPU governor enabled for auto-scaling
 # monitor_example	- Example monitoring commands
 # pppoe_lb_test.sh	- Comprehensive test script with auto-scaling
-#
+# _ngctl_pppoe_lb	- Bash completion for ngctl pppoe_lb commands
+# _pppoed			- Bash completion for pppoed
+
 # Shell Completions
 # -----------------
 # Bash completions (for bash-completion port):
-#   cp _ngctl_pppoe_lb /usr/local/etc/bash_completion.d/
-#   cp _pppoed /usr/local/etc/bash_completion.d/
-#   source /usr/local/etc/bash_completion.d/_ngctl_pppoe_lb
-#   source /usr/local/etc/bash_completion.d/_pppoed
-#
-# Zsh completions (for zsh port):
-#   cp _ngctl_pppoe_lb /usr/local/share/zsh/site-functions/_ngctl
-#   cp _pppoed /usr/local/share/zsh/site-functions/_pppoed
-#   # Add to ~/.zshrc:
-#   fpath=(/usr/local/share/zsh/site-functions $fpath)
-#   autoload -Uz _ngctl _pppoed
-#
+#   sudo cp _ngctl_pppoe_lb /usr/local/etc/bash_completion.d/
+#   sudo cp _pppoed /usr/local/etc/bash_completion.d/
+#   exec bash  # Reload bash to activate completions
+
 # Tcsh completions (FreeBSD default shell):
 #   cp ngctl.completion ~/.cshrc
 #   cp pppoed.completion ~/.cshrc
@@ -55,3 +49,27 @@
 # 2. Choose a configuration below
 # 3. Review and modify interface names as needed
 # 4. Run ngctl -f <config-file>
+
+# For comprehensive integration tests (run in VM only):
+#   cd tests/netgraph
+#   sudo ./ng_pppoe_lb_vm_test.sh
+
+# Auto-Scaling with pppoed
+# -------------------------
+# pppoed supports automatic worker scaling via CPU governor:
+#   pppoed -L -w 2 -G 0 -M 2 -I 5 -c 80 -C 30 em0
+#
+# Options explained:
+#   -L              Enable load balancer mode
+#   -w 2            Start with 2 workers
+#   -G 0            Governor max workers (0=auto-detect CPU cores)
+#   -M 2            Governor minimum workers
+#   -I 5            Governor poll interval (seconds)
+#   -c 80           Scale up when CPU > 80%
+#   -C 30           Scale down when CPU < 30%
+
+# See Also
+# ---------
+# ng_pppoe_lb(4)      - Kernel module documentation
+# pppoed(8)            - Daemon documentation
+# ngctl(8)             - Netgraph control utility

@@ -1,80 +1,79 @@
-#compdef ngctl
-
-# Zsh completion for ngctl pppoe_lb subcommands
-# Install: Copy to /usr/local/share/zsh/site-functions/ or ~/.zshrc:
-#   fpath=(/path/to/this/file $fpath)
-#   autoload -Uz _ngctl_pppoe_lb
+# Bash completion for ngctl pppoe_lb subcommands
+# Install: Copy to /usr/local/etc/bash_completion.d/
+#   cp _ngctl_pppoe_lb /usr/local/etc/bash_completion.d/
 
 _ngctl_pppoe_lb() {
-    local -a commands
-    commands=(
-        'show:Show PPPoE load balancer information'
-        'info:Alias for show'
-        'config:Configure PPPoE load balancer'
-        'set:Alias for config'
-        'stats:Show PPPoE load balancer statistics'
-        'statistics:Alias for stats'
-        'map:Show PPPoE session-to-worker mapping'
-        'sessions:Alias for map'
-    )
+    local cur prev words cword
+    _init_completion || return
 
-    local -a algorithm_opts
-    algorithm_opts=(
-        '0:round-robin'
-        '1:hash-based'
-        '2:least-loaded'
-    )
+    local commands="show info config set stats statistics map sessions workers worker governor trigger"
+    local algorithm_opts="0 1 2"
+    local config_params="algorithm max_workers debug num_workers"
+    local worker_states="0 1 2"
+    local governor_decisions="none scale_up scale_down cancel no_action"
 
-    local -a config_params
-    config_params=(
-        'algorithm:Load balancing algorithm'
-        'max_workers:Maximum workers for governor'
-        'debug:Debug level'
-    )
-
-    local curcontext="$curcontext" state line
-    typeset -A opt_args
-
-    _arguments -C \
-        '-h[Show help]' \
-        '*::subcommand:->subcommand' \
-        '*::arg:->arg'
-
-    case $state in
-        subcommand)
-            _describe 'command' commands
+    case "$prev" in
+        pppoe_lb)
+            COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+            return 0
             ;;
-        arg)
-            case ${words[1]} in
-                show|info)
-                    _path_files -W /tmp -P / -f
-                    ;;
-                config|set)
-                    case ${words[2]} in
-                        algorithm)
-                            _describe 'algorithm' algorithm_opts
-                            ;;
-                        max_workers|debug)
-                            _numbers 0 1 2 4 8 10 16 32
-                            ;;
-                        *)
-                            if [[ ${#words[@]} -eq 2 ]]; then
-                                _path_files -W /tmp -P / -f
-                            else
-                                _describe 'parameter' config_params
-                            fi
-                            ;;
-                    esac
-                    ;;
-                stats|statistics)
-                    _path_files -W /tmp -P / -f
-                    ;;
-                map|sessions)
-                    _path_files -W /tmp -P / -f
-                    ;;
-            esac
+        show|info)
+            # Complete with netgraph paths
+            _filedir
+            return 0
+            ;;
+        config|set)
+            if [[ "$cur" == *=* ]]; then
+                # Complete value after =
+                local param="${cur%%=*}"
+                local val="${cur##*=}"
+                case "$param" in
+                    algorithm)
+                        COMPREPLY=($(compgen -W "$algorithm_opts" -- "$val"))
+                        ;;
+                    max_workers|num_workers|debug)
+                        COMPREPLY=($(compgen -W "0 1 2 4 8 10 16 32 64" -- "$val"))
+                        ;;
+                esac
+            else
+                # Complete parameter name
+                COMPREPLY=($(compgen -W "$config_params" -S '=' -- "$cur"))
+            fi
+            return 0
+            ;;
+        stats|statistics)
+            _filedir
+            return 0
+            ;;
+        map|sessions)
+            _filedir
+            return 0
+            ;;
+        workers)
+            if [[ "$cur" == *=* ]]; then
+                _filedir
+            else
+                COMPREPLY=($(compgen -W "count state sessions" -S '=' -- "$cur"))
+            fi
+            return 0
+            ;;
+        worker)
+            # worker N [command]
+            COMPREPLY=($(compgen -W "state sessions" -- "$cur"))
+            return 0
+            ;;
+        governor)
+            COMPREPLY=($(compgen -W "status config" -- "$cur"))
+            return 0
+            ;;
+        trigger)
+            COMPREPLY=($(compgen -W "scale_up scale_down" -- "$cur"))
+            return 0
             ;;
     esac
+
+    # Default completion
+    return 0
 }
 
-_ngctl_pppoe_lb "$@"
+complete -F _ngctl_pppoe_lb ngctl

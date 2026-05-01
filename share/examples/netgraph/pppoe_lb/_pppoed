@@ -1,65 +1,73 @@
-#compdef pppoed
-
-# Zsh completion for pppoed
-# Install: Copy to /usr/local/share/zsh/site-functions/ or ~/.zshrc:
-#   fpath=(/path/to/this/file $fpath)
-#   autoload -Uz _pppoed
+# Bash completion for pppoed
+# Install: Copy to /usr/local/etc/bash_completion.d/
+#   cp _pppoed /usr/local/etc/bash_completion.d/
 
 _pppoed() {
-    local -a opts
-    opts=(
-        '-F[Run in foreground]'
-        '-d[Enable debug output]'
-        '-P:[PID file]:_files'
-        '-a:[Provider name]:->providers'
-        '-e:[Exec command]:_files -g "*"'
-        '-l:[Label name]'
-        '-n:[Netgraph debug level]'
-        '-p:[Provider name]:->providers'
-        '-L[Enable multi-worker mode]'
-        '-w:[Number of workers]:->workers'
-        '-A:[Algorithm]:->algorithm'
-        '-G:[Maximum workers for governor]'
-        '*:interface:->interfaces'
-    )
+    local cur prev words cword
+    _init_completion || return
 
-    local -a algorithms
-    algorithms=(
-        '0:round-robin'
-        '1:hash-based'
-        '2:least-loaded'
-    )
+    local algorithms="0 1 2"
+    local worker_counts="1 2 4 8 16"
+    local thresholds="10 20 30 40 50 60 70 80 90"
 
-    local -a worker_counts
-    worker_counts=(1 2 4 8 16)
-
-    local curcontext="$curcontext" state line
-    typeset -A opt_args
-
-    _arguments -C "$opts[@]"
-
-    case $state in
-        providers)
-            local -a providers
+    case "$prev" in
+        -P)
+            _filedir
+            return 0
+            ;;
+        -a|-p)
+            # Complete provider names from ppp.conf
+            local providers
             if [[ -f /etc/ppp/ppp.conf ]]; then
-                providers=(${(f)"$(grep -E '^[a-zA-Z0-9_]+:' /etc/ppp/ppp.conf 2>/dev/null | cut -d: -f1)"})
+                providers=$(grep -E '^[a-zA-Z0-9_]+:' /etc/ppp/ppp.conf 2>/dev/null | cut -d: -f1)
+                COMPREPLY=($(compgen -W "$providers" -- "$cur"))
             else
-                providers=(default)
+                COMPREPLY=($(compgen -W "default" -- "$cur"))
             fi
-            _describe 'provider' providers
+            return 0
             ;;
-        workers)
-            _describe 'worker count' worker_counts
+        -e)
+            _filedir -g '*'
+            return 0
             ;;
-        algorithm)
-            _describe 'algorithm' algorithms
+        -n)
+            COMPREPLY=($(compgen -W "1 2 3 4 5 6 7" -- "$cur"))
+            return 0
             ;;
-        interfaces)
-            local -a interfaces
-            interfaces=(${(f)"$(ifconfig -l 2>/dev/null)"})
-            _describe 'interface' interfaces
+        -w|-G|-M)
+            COMPREPLY=($(compgen -W "$worker_counts 0" -- "$cur"))
+            return 0
+            ;;
+        -A)
+            COMPREPLY=($(compgen -W "$algorithms" -- "$cur"))
+            return 0
+            ;;
+        -I)
+            COMPREPLY=($(compgen -W "1 2 5 10 15 30 60" -- "$cur"))
+            return 0
+            ;;
+        -c|-C)
+            COMPREPLY=($(compgen -W "$thresholds" -- "$cur"))
+            return 0
+            ;;
+        -l)
+            return 0
+            ;;
+        -F|-d|-L)
+            return 0
             ;;
     esac
+
+    # Complete options
+    COMPREPLY=($(compgen -W '-F -d -P -a -e -l -n -p -L -w -A -G -M -I -c -C' -- "$cur"))
+
+    # Complete interface names
+    if [[ "$cur" != -* ]]; then
+        local interfaces=$(ifconfig -l 2>/dev/null)
+        COMPREPLY+=($(compgen -W "$interfaces" -- "$cur"))
+    fi
+
+    return 0
 }
 
-_pppoed "$@"
+complete -F _pppoed pppoed

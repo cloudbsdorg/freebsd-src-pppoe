@@ -326,9 +326,197 @@ test_ngctl_commands() {
     return 0
 }
 
-# Test 6: Memory leak check (basic)
+# Test 6: Algorithm selection
+test_algorithm_selection() {
+    log_info "Test 6: Algorithm selection"
+    
+    load_modules || return 1
+    
+    # Test round-robin (algorithm 0)
+    sysctl net.graph.pppoe_lb.algorithm=0
+    ALGO=$(sysctl -n net.graph.pppoe_lb.algorithm)
+    if [ "$ALGO" != "0" ]; then
+        log_error "Algorithm round-robin not set (expected 0, got $ALGO)"
+        unload_modules
+        return 1
+    fi
+    
+    # Test hash (algorithm 1)
+    sysctl net.graph.pppoe_lb.algorithm=1
+    ALGO=$(sysctl -n net.graph.pppoe_lb.algorithm)
+    if [ "$ALGO" != "1" ]; then
+        log_error "Algorithm hash not set (expected 1, got $ALGO)"
+        unload_modules
+        return 1
+    fi
+    
+    # Test least-loaded (algorithm 2)
+    sysctl net.graph.pppoe_lb.algorithm=2
+    ALGO=$(sysctl -n net.graph.pppoe_lb.algorithm)
+    if [ "$ALGO" != "2" ]; then
+        log_error "Algorithm least-loaded not set (expected 2, got $ALGO)"
+        unload_modules
+        return 1
+    fi
+    
+    # Reset to default
+    sysctl net.graph.pppoe_lb.algorithm=0
+    
+    unload_modules
+    
+    log_info "Test 6: PASSED"
+    return 0
+}
+
+# Test 7: Worker state management
+test_worker_state_management() {
+    log_info "Test 7: Worker state management"
+    
+    load_modules || return 1
+    
+    # Set a specific worker state (if workers exist)
+    # Worker states: 0=ACTIVE, 1=DRAINING, 2=PENDING_REMOVAL
+    WORKER0_STATE=$(sysctl -n net.graph.pppoe_lb.workers.0.state 2>/dev/null || echo "N/A")
+    
+    if [ "$WORKER0_STATE" != "N/A" ]; then
+        # Worker 0 exists, test state transitions
+        # Note: Some transitions may not be allowed by the kernel
+        # This tests that the sysctl interface works
+        sysctl net.graph.pppoe_lb.workers.0.state=0 2>/dev/null || true
+        NEW_STATE=$(sysctl -n net.graph.pppoe_lb.workers.0.state 2>/dev/null || echo "0")
+        
+        if [ "$NEW_STATE" -lt 0 ] || [ "$NEW_STATE" -gt 2 ]; then
+            log_error "Worker 0 state invalid: $NEW_STATE"
+            unload_modules
+            return 1
+        fi
+    fi
+    
+    unload_modules
+    
+    log_info "Test 7: PASSED"
+    return 0
+}
+
+# Test 8: Governor threshold configuration
+test_governor_thresholds() {
+    log_info "Test 8: Governor threshold configuration"
+    
+    load_modules || return 1
+    
+    # Configure governor thresholds
+    sysctl net.graph.pppoe_lb.governor.cpu_threshold=75
+    sysctl net.graph.pppoe_lb.governor.cpu_low_threshold=25
+    sysctl net.graph.pppoe_lb.governor.sessions_per_worker=250
+    sysctl net.graph.pppoe_lb.governor.drain_timeout=45
+    
+    # Verify thresholds
+    CPU_HIGH=$(sysctl -n net.graph.pppoe_lb.governor.cpu_threshold)
+    CPU_LOW=$(sysctl -n net.graph.pppoe_lb.governor.cpu_low_threshold)
+    SESSIONS=$(sysctl -n net.graph.pppoe_lb.governor.sessions_per_worker)
+    DRAIN=$(sysctl -n net.graph.pppoe_lb.governor.drain_timeout)
+    
+    if [ "$CPU_HIGH" != "75" ]; then
+        log_error "CPU threshold not set (expected 75, got $CPU_HIGH)"
+        unload_modules
+        return 1
+    fi
+    
+    if [ "$CPU_LOW" != "25" ]; then
+        log_error "CPU low threshold not set (expected 25, got $CPU_LOW)"
+        unload_modules
+        return 1
+    fi
+    
+    if [ "$SESSIONS" != "250" ]; then
+        log_error "Sessions per worker not set (expected 250, got $SESSIONS)"
+        unload_modules
+        return 1
+    fi
+    
+    if [ "$DRAIN" != "45" ]; then
+        log_error "Drain timeout not set (expected 45, got $DRAIN)"
+        unload_modules
+        return 1
+    fi
+    
+    unload_modules
+    
+    log_info "Test 8: PASSED"
+    return 0
+}
+
+# Test 9: Governor mode switching
+test_governor_mode_switching() {
+    log_info "Test 9: Governor mode switching"
+    
+    load_modules || return 1
+    
+    # Disable governor
+    sysctl net.graph.pppoe_lb.governor.enabled=0
+    ENABLED=$(sysctl -n net.graph.pppoe_lb.governor.enabled)
+    if [ "$ENABLED" != "0" ]; then
+        log_error "Governor not disabled (expected 0, got $ENABLED)"
+        unload_modules
+        return 1
+    fi
+    
+    # Enable governor in manual mode
+    sysctl net.graph.pppoe_lb.governor.enabled=1
+    sysctl net.graph.pppoe_lb.governor.mode=0
+    ENABLED=$(sysctl -n net.graph.pppoe_lb.governor.enabled)
+    MODE=$(sysctl -n net.graph.pppoe_lb.governor.mode)
+    
+    if [ "$ENABLED" != "1" ] || [ "$MODE" != "0" ]; then
+        log_error "Governor manual mode not set correctly"
+        unload_modules
+        return 1
+    fi
+    
+    # Enable governor in auto mode
+    sysctl net.graph.pppoe_lb.governor.mode=1
+    MODE=$(sysctl -n net.graph.pppoe_lb.governor.mode)
+    if [ "$MODE" != "1" ]; then
+        log_error "Governor auto mode not set correctly"
+        unload_modules
+        return 1
+    fi
+    
+    # Disable again
+    sysctl net.graph.pppoe_lb.governor.enabled=0
+    
+    unload_modules
+    
+    log_info "Test 9: PASSED"
+    return 0
+}
+
+# Test 10: Debug level configuration
+test_debug_level() {
+    log_info "Test 10: Debug level configuration"
+    
+    load_modules || return 1
+    
+    # Set various debug levels
+    for level in 0 1 2 3 4 5; do
+        sysctl net.graph.pppoe_lb.debug=$level
+        DEBUG=$(sysctl -n net.graph.pppoe_lb.debug)
+        if [ "$DEBUG" != "$level" ]; then
+            log_error "Debug level $level not set (got $DEBUG)"
+            unload_modules
+            return 1
+        fi
+    done
+    
+    unload_modules
+    
+    log_info "Test 10: PASSED"
+    return 0
+}
+
+# Test 11: Memory leak check (basic)
 test_memory_leak() {
-    log_info "Test 6: Basic memory leak check"
+    log_info "Test 11: Basic memory leak check"
     
     load_modules || return 1
     
@@ -354,7 +542,7 @@ test_memory_leak() {
     
     unload_modules
     
-    log_info "Test 6: PASSED (no obvious leaks)"
+    log_info "Test 11: PASSED (no obvious leaks)"
     return 0
 }
 
@@ -411,6 +599,36 @@ main() {
     fi
     
     if test_ngctl_commands; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    
+    if test_algorithm_selection; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    
+    if test_worker_state_management; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    
+    if test_governor_thresholds; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    
+    if test_governor_mode_switching; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    
+    if test_debug_level; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
