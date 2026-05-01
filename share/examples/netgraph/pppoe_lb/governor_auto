@@ -1,14 +1,223 @@
 #!/bin/sh
 #
 # PPPoE Load Balancer - CPU Governor Auto-Scaling
+# ================================================
 #
-# This example enables the CPU governor for automatic worker scaling.
-# Workers are added when CPU > 80% and removed when CPU < 20%.
+# WHAT THIS DOES:
+# Creates a PPPoE load balancer that automatically adjusts worker count
+# based on CPU utilization. The governor monitors CPU usage and:
+#   - Adds workers when CPU exceeds threshold (scale UP)
+#   - Removes workers when CPU drops below threshold (scale DOWN)
 #
-# Usage: ngctl -f governor_auto
+# WHEN TO USE:
+# - Production environments with variable load
+# - Systems where you want "set and forget" scaling
+# - ISPs with peak usage hours (evening/weekends)
+# - Any deployment where session counts fluctuate significantly
 #
-# Note: The governor is controlled via sysctl variables.
-# View current settings with: sysctl net.graph.pppoe_lb.governor
+# WHEN NOT TO USE:
+# - Predictable, constant load (use basic_4workers with fixed workers)
+# - Very small systems with limited resources
+# - Environments where frequent worker changes are disruptive
+#
+# ARCHITECTURE:
+#
+#   +------------------+
+#   |    Governor      |    <-- Monitors CPU via sysctl
+#   |  (auto-scaler)   |        every poll_interval seconds
+#   +--------+---------+
+#            |
+#            v (scale up/down signals)
+#   +------------------+     +------------------+
+#   |   pppoe_lb       |---->|   Worker Pool   |
+#   |   (dispatcher)   |     | (grows/shrinks) |
+#   +------------------+     +------------------+
+#
+# GOVERNOR STATE MACHINE:
+#
+#   +----------+    CPU > threshold    +----------+
+#   |   IDLE   |---------------------->| SCALE_UP |
+#   +----------+                       +----------+
+#       ^                                  |
+#       |                                  v
+#       |       CPU < low_threshold        |
+#       +<-----------------------------+
+#       |       (after cooldown)
+#       |
+#   +----------+    CPU < low_threshold +----------+
+#   |  DRAIN   |<---------------------|SCALE_DOWN|
+#   +----------+                      +----------+
+#       ^                                  |
+#       |                                  |
+#       |     "Change of Heart"            |
+#       |<---------------------------------+
+#       |     (load spikes during drain)
+#       +--------------------------------->+
+#
+# PREREQUISITES:
+#   kldload netgraph
+#   kldload ng_ether
+#   kldload ng_pppoe
+#   kldload ng_pppoe_lb
+#
+# GOVERNOR PARAMETERS:
+#   Initial workers:     2 (starts with 2 workers)
+#   Max workers:         4 (will not exceed this)
+#   Scale up threshold:  80% CPU
+#   Scale down threshold: 20% CPU
+#   Scale up interval:   5 seconds (minimum between scale-ups)
+#   Scale down interval: 60 seconds (minimum between scale-downs)
+#
+# WHAT HAPPENS STEP BY STEP:
+#
+#   1. System starts with 2 workers (INITIAL_WORKERS=2)
+#   2. Governor polls CPU every 5 seconds
+#   3. CPU exceeds 80% for 5+ seconds:
+#      -> Governor signals for new worker
+#      -> Worker 2 is created
+#      -> Current: 3 workers
+#   4. Load continues increasing
+#   5. CPU exceeds 80% again for 5+ seconds:
+#      -> Another worker created
+#      -> Current: 4 workers (at max)
+#   6. Load decreases
+#   7. CPU drops below 20% for 60+ seconds:
+#      -> Governor marks worker for DRAINING
+#      -> Worker stops receiving new sessions
+#      -> Existing sessions complete naturally
+#   8. After drain timeout (30s), worker removed if empty
+#
+# SCALING TIMELINE EXAMPLE:
+#
+#   Time    CPU    Workers  Event
+#   ----    ---    -------  -----
+#   00:00   15%    2        Normal operation
+#   00:05   45%    2        Load increasing...
+#   00:15   82%    2        Scale UP triggered!
+#   00:15   82%    3        Worker 2 created
+#   00:30   75%    3        Stabilized
+#   01:00   18%    3        Load decreasing...
+#   01:05   15%    3        Scale DOWN triggered!
+#   01:05   15%    3        Worker marked DRAINING
+#   01:35   15%    2        Worker removed (drain complete)
+#
+# "CHANGE OF HEART" SCENARIO:
+#
+#   Time    CPU    Workers  Event
+#   ----    ---    -------  -----
+#   10:00   15%    3        Normal operation
+#   10:10   12%    3        Scale DOWN triggered
+#   10:10   12%    3        Worker 2 marked DRAINING
+#   10:25   85%    3        Traffic spike! (evening peak)
+#   10:25   85%    3        Scale UP needed
+#   10:25   85%    3        "Change of heart" - cancel drain!
+#   10:25   85%    3        Worker 2 returns to ACTIVE
+#   10:25   85%    4        Worker 3 created (scale up)
+#
+# USAGE:
+#   1. Load kernel modules (see prerequisites)
+#   2. Review and adjust parameters below if needed
+#   3. Run: ngctl -f governor_auto
+#   4. Start pppoed: pppoed -L -w 2 -G 0 -M 2 em0
+#   5. Monitor: sysctl net.graph.pppoe_lb.governor
+#
+# VERIFICATION STEPS:
+#   Step 1: Check governor is enabled:
+#     sysctl net.graph.pppoe_lb.governor.enabled
+#     Expected: net.graph.pppoe_lb.governor.enabled: 1
+#
+#   Step 2: Check governor settings:
+#     sysctl net.graph.pppoe_lb.governor
+#     Expected: Shows cpu_threshold, max_workers, etc.
+#
+#   Step 3: Monitor governor decisions:
+#     tail -f /var/log/messages | grep pppoe_lb
+#     Expected: "governor: scale up" or "governor: scale down" messages
+#
+#   Step 4: Check worker states:
+#     sysctl net.graph.pppoe_lb.workers
+#     Expected: Each worker's state (0=ACTIVE, 1=DRAINING, 2=PENDING_REMOVAL)
+#
+# EXPECTED OUTPUT - Governor Status:
+#
+#   # sysctl net.graph.pppoe_lb.governor
+#   net.graph.pppoe_lb.governor.enabled: 1
+#   net.graph.pppoe_lb.governor.mode: 1
+#   net.graph.pppoe_lb.governor.min_workers: 2
+#   net.graph.pppoe_lb.governor.max_workers: 4
+#   net.graph.pppoe_lb.governor.cpu_threshold: 80
+#   net.graph.pppoe_lb.governor.cpu_low_threshold: 20
+#   net.graph.pppoe_lb.governor.scale_up_interval: 5
+#   net.graph.pppoe_lb.governor.scale_down_interval: 60
+#   net.graph.pppoe_lb.governor.current_workers: 2
+#   net.graph.pppoe_lb.governor.active_workers: 2
+#   net.graph.pppoe_lb.governor.draining_workers: 0
+#   net.graph.pppoe_lb.governor.total_sessions: 0
+#   net.graph.pppoe_lb.governor.last_decision: none
+#   net.graph.pppoe_lb.governor.last_reason: none
+#
+# EXPECTED LOG ENTRIES:
+#
+#   # /var/log/messages
+#   May  1 10:15:22 hostname ng_pppoe_lb: governor: scale up (reason: cpu_high)
+#   May  1 10:15:22 hostname ng_pppoe_lb: created worker 2 (now 3 workers)
+#   May  1 10:25:10 hostname ng_pppoe_lb: governor: scale down (reason: cpu_low)
+#   May  1 10:25:10 hostname ng_pppoe_lb: mark worker 2 for removal (draining)
+#   May  1 10:25:15 hostname ng_pppoe_lb: governor: scale up (reason: cpu_high)
+#   May  1 10:25:15 hostname ng_pppoe_lb: cancel removal of worker 2 (change of heart)
+#
+# WORKER STATE REFERENCE:
+#
+#   State Value   Name              Description
+#   -----------   ----------------  ----------------------------------
+#   0             ACTIVE            Accepting new sessions, processing
+#   1             DRAINING          No new sessions, existing completing
+#   2             PENDING_REMOVAL   Empty, ready for removal
+#
+# CONFIGURABLE PARAMETERS:
+#
+#   You can modify these values in this script or via sysctl:
+#
+#   Parameter               Default  Range    What it controls
+#   ---------               -------  -----    -----------------
+#   INITIAL_WORKERS         2        1-16     Workers at startup
+#   MAX_WORKERS             4        1-16     Ceiling for scaling
+#   cpu_threshold           80       50-95    Scale up trigger (%)
+#   cpu_low_threshold       20       5-50     Scale down trigger (%)
+#   scale_up_interval       5        1-60     Min seconds between scale-ups
+#   scale_down_interval     60       10-300   Min seconds between scale-downs
+#   drain_timeout           30        5-120    Seconds to wait for drain
+#
+# TUNING RECOMMENDATIONS:
+#
+#   For aggressive scaling (faster response):
+#     cpu_threshold=70
+#     cpu_low_threshold=40
+#     scale_up_interval=3
+#     scale_down_interval=30
+#
+#   For conservative scaling (fewer changes):
+#     cpu_threshold=85
+#     cpu_low_threshold=15
+#     scale_up_interval=10
+#     scale_down_interval=120
+#
+# TROUBLESHOOTING:
+#
+#   Governor not scaling up:
+#     - Check enabled: sysctl net.graph.pppoe_lb.governor.enabled
+#     - Check CPU: sysctl net.graph.pppoe_lb.governor.cpu_usage
+#     - Check max: sysctl net.graph.pppoe_lb.governor.max_workers
+#
+#   Governor not scaling down:
+#     - Check workers have few sessions
+#     - Check scale_down_interval hasn't elapsed
+#     - Workers in DRAINING state take drain_timeout to clear
+#
+#   Workers stuck in DRAINING:
+#     - Sessions not disconnecting
+#     - Check: sysctl net.graph.pppoe_lb.workers.{id}.sessions
+#     - Manually clear: sysctl net.graph.pppoe_lb.workers.{id}.state=0
 
 ETHER_IFACE="em0"
 LB_NODE="pppoe_lb0"
@@ -49,3 +258,20 @@ show $LB_NODE:
 # Monitor with:
 #   ngctl msg pppoe_lb0: getstats
 #   sysctl net.graph.pppoe_lb.governor
+
+# QUICK REFERENCE - Common Tasks:
+#
+#   View governor status:
+#     sysctl net.graph.pppoe_lb.governor
+#
+#   Disable governor (manual mode):
+#     sysctl net.graph.pppoe_lb.governor.enabled=0
+#
+#   Manually add a worker:
+#     ngctl msg pppoe_lb0: addworker
+#
+#   Manually remove a worker:
+#     ngctl msg pppoe_lb0: rmworker 2
+#
+#   Cancel a draining worker:
+#     sysctl net.graph.pppoe_lb.workers.2.state=0

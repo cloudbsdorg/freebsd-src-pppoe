@@ -1,75 +1,202 @@
 # PPPoE Load Balancer Examples
+# ============================
 #
 # This directory contains example configurations for the ng_pppoe_lb
-# (PPPoE Load Balancer) netgraph node.
+# (PPPoE Load Balancer) netgraph node and pppoed daemon.
 #
-# For detailed documentation, see ng_pppoe_lb(4).
+# Each configuration file is extensively documented with:
+#   - What it does and why you'd use it
+#   - Architecture diagrams
+#   - Expected outputs
+#   - Step-by-step verification
+#   - Troubleshooting tips
+#
+# For detailed documentation, see: ng_pppoe_lb(4)
 
-# Prerequisites
+# =============================================================================
+# QUICK START
+# =============================================================================
+
+# Step 1: Load kernel modules
+kldload netgraph
+kldload ng_ether
+kldload ng_pppoe
+kldload ng_pppoe_lb
+
+# Step 2: Choose a configuration (see below)
+# Step 3: Run the configuration: ngctl -f <config-file>
+# Step 4: Start the daemon: pppoed -L -w N em0
+
+# =============================================================================
+# CONFIGURATION FILES
+# =============================================================================
+
+# basic_2workers
 # -------------
-# Before using these examples, ensure the required kernel modules are loaded:
+# WHAT: Creates a load balancer with 2 worker nodes
+# WHY:  Testing, dual-core systems, low session counts
+# START: 2 workers (fixed)
+# AUTO-SCALING: No
+# CAPACITY: ~1000 sessions
 #
-#   kldload netgraph
-#   kldload ng_ether
-#   kldload ng_pppoe
-#   kldload ng_pppoe_lb
+# Use when:
+#   - First time testing the load balancer
+#   - System has only 2 CPU cores
+#   - Session count is expected to be low (<500)
 #
-# Or add to /boot/loader.conf:
-#   netgraph_load="YES"
-#   ng_ether_load="YES"
-#   ng_pppoe_load="YES"
-#   ng_pppoe_lb_load="YES"
+# Try this first!
 
-# Files in this directory
-# -----------------------
-# basic_2workers		- Basic setup with 2 worker nodes
-# basic_4workers		- Setup with 4 worker nodes (multi-core)
-# governor_auto		- CPU governor enabled for auto-scaling
-# monitor_example	- Example monitoring commands
-# pppoe_lb_test.sh	- Comprehensive test script with auto-scaling
-# _ngctl_pppoe_lb	- Bash completion for ngctl pppoe_lb commands
-# _pppoed			- Bash completion for pppoed
+# basic_4workers
+# --------------
+# WHAT: Creates a load balancer with 4 worker nodes
+# WHY:  Production on quad-core, moderate-high session counts
+# START: 4 workers (fixed)
+# AUTO-SCALING: No
+# CAPACITY: ~2000 sessions
+#
+# Use when:
+#   - Production deployment on quad-core system
+#   - Predictable, constant load
+#   - Want consistent distribution without scaling overhead
+#
+# Recommended for most production deployments
 
-# Shell Completions
-# -----------------
-# Bash completions (for bash-completion port):
-#   sudo cp _ngctl_pppoe_lb /usr/local/etc/bash_completion.d/
-#   sudo cp _pppoed /usr/local/etc/bash_completion.d/
-#   exec bash  # Reload bash to activate completions
+# governor_auto
+# -------------
+# WHAT: Load balancer with automatic worker scaling based on CPU
+# WHY:  Variable load, "set and forget" operation
+# START: 2 workers (auto-scales up to 4)
+# AUTO-SCALING: Yes (CPU-based)
+# CAPACITY: 500-2000 sessions (scales with load)
+#
+# Use when:
+#   - Load varies significantly (evening/weekend peaks)
+#   - Want automatic resource optimization
+#   - Can't predict session counts in advance
+#
+# Governor scales workers up when CPU > 80%
+# Governor scales workers down when CPU < 20%
+
+# monitor_example
+# ---------------
+# WHAT: Commands for monitoring the load balancer
+# WHY:  Health checks, troubleshooting, capacity planning
+#
+# Contains:
+#   - Status checks
+#   - Statistics commands
+#   - Continuous monitoring
+#   - Health check script
+#   - Troubleshooting guide
+
+# =============================================================================
+# SHELL COMPLETIONS
+# =============================================================================
+
+# Bash completions (requires bash-completion port):
+sudo cp _ngctl_pppoe_lb /usr/local/etc/bash_completion.d/
+sudo cp _pppoed /usr/local/etc/bash_completion.d/
+exec bash  # Reload bash to activate completions
 
 # Tcsh completions (FreeBSD default shell):
-#   cp ngctl.completion ~/.cshrc
-#   cp pppoed.completion ~/.cshrc
-#   source ~/.cshrc
+cp ngctl.completion ~/.cshrc
+cp pppoed.completion ~/.cshrc
+source ~/.cshrc
 
-# Testing
-# -------
-# To test these configurations:
-# 1. Load required kernel modules
-# 2. Choose a configuration below
-# 3. Review and modify interface names as needed
-# 4. Run ngctl -f <config-file>
+# =============================================================================
+# STARTUP CONFIGURATION (/etc/rc.conf)
+# =============================================================================
+
+# Add to /etc/rc.conf for automatic startup:
+
+# Option 1: Basic 4-worker setup
+#pppoed_enable="YES"
+#pppoed_interface="em0"
+#pppoed_flags="-L -w 4"
+
+# Option 2: Auto-scaling with governor
+#pppoed_enable="YES"
+#pppoed_interface="em0"
+#pppoed_flags="-L -w 2 -G 0 -M 2"
+
+# See share/examples/etc/rc.conf.pppoe_lb for more options
+
+# =============================================================================
+# AUTO-SCALING GOVERNMENT
+# =============================================================================
+
+# The governor monitors CPU usage and automatically adjusts workers:
+
+# pppoed with full governor options:
+pppoed -L -w 2 -G 0 -M 2 -I 5 -c 80 -C 30 em0
+
+# Option reference:
+#   -L              Enable load balancer mode
+#   -w 2            Start with 2 workers
+#   -G 0            Max workers (0=auto-detect CPU cores)
+#   -M 2            Minimum workers (never scales below)
+#   -I 5            Governor poll interval (seconds)
+#   -c 80           Scale up when CPU > 80%
+#   -C 30           Scale down when CPU < 30%
+
+# Governor parameters can also be set via sysctl:
+#   net.graph.pppoe_lb.governor.enabled=1
+#   net.graph.pppoe_lb.governor.cpu_threshold=80
+#   net.graph.pppoe_lb.governor.cpu_low_threshold=30
+
+# =============================================================================
+# VERIFICATION
+# =============================================================================
+
+# After starting the load balancer, verify it's working:
+
+# 1. Check nodes exist:
+ngctl list | grep pppoe
+
+# 2. Check worker count:
+sysctl net.graph.pppoe_lb.governor.current_workers
+
+# 3. Check session count:
+sysctl net.graph.pppoe_lb.governor.total_sessions
+
+# 4. Monitor continuously:
+watch -n 5 'sysctl net.graph.pppoe_lb.governor | grep -E "(workers|sessions)"'
+
+# =============================================================================
+# TESTING
+# =============================================================================
 
 # For comprehensive integration tests (run in VM only):
 #   cd tests/netgraph
 #   sudo ./ng_pppoe_lb_vm_test.sh
 
-# Auto-Scaling with pppoed
-# -------------------------
-# pppoed supports automatic worker scaling via CPU governor:
-#   pppoed -L -w 2 -G 0 -M 2 -I 5 -c 80 -C 30 em0
-#
-# Options explained:
-#   -L              Enable load balancer mode
-#   -w 2            Start with 2 workers
-#   -G 0            Governor max workers (0=auto-detect CPU cores)
-#   -M 2            Governor minimum workers
-#   -I 5            Governor poll interval (seconds)
-#   -c 80           Scale up when CPU > 80%
-#   -C 30           Scale down when CPU < 30%
+# =============================================================================
+# TROUBLESHOOTING
+# =============================================================================
 
-# See Also
-# ---------
-# ng_pppoe_lb(4)      - Kernel module documentation
-# pppoed(8)            - Daemon documentation
-# ngctl(8)             - Netgraph control utility
+# Problem: "No such file or directory" when running ngctl
+# Fix:    kldload ng_pppoe_lb
+
+# Problem: Governor not scaling
+# Fix:    sysctl net.graph.pppoe_lb.governor.enabled=1
+
+# Problem: Sessions not distributed evenly
+# Fix:    Check worker states with: sysctl net.graph.pppoe_lb.workers
+
+# Problem: High error count
+# Fix:    Check hardware, cables, switches
+
+# See monitor_example for detailed troubleshooting commands
+
+# =============================================================================
+# SEE ALSO
+# =============================================================================
+
+# Man pages:
+#   ng_pppoe_lb(4)   - Kernel module documentation
+#   pppoed(8)        - Daemon documentation
+#   ngctl(8)         - Netgraph control utility
+#
+# Handbook:
+#   https://docs.freebsd.org/en/books/handbook/ppp-and-slip/
+#   (Section 30.7: Multi-Worker PPPoE Load Balancer)

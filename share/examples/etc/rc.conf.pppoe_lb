@@ -1,81 +1,203 @@
 # PPPoE Load Balancer - /etc/rc.conf Examples
+# ===========================================
 #
-# Add these lines to /etc/rc.conf to enable multithreaded PPPoE.
-# See pppoed(8) and ng_pppoe_lb(4) for details.
+# WHAT THIS FILE IS:
+# Example configurations for enabling multithreaded PPPoE load balancing.
+# Copy the appropriate section to /etc/rc.conf.
 #
+# For detailed documentation, see:
+#   - pppoed(8) - Daemon documentation
+#   - ng_pppoe_lb(4) - Kernel module documentation
+#   - share/examples/netgraph/pppoe_lb/README - Example configurations
+#
+# IMPORTANT: You MUST also load kernel modules in /boot/loader.conf:
+#   netgraph_load="YES"
+#   ng_ether_load="YES"
+#   ng_pppoe_load="YES"
+#   ng_pppoe_lb_load="YES"
 
-# =========================================================================
-# Option 1: Basic 2-worker load balancer
-# =========================================================================
-# pppoed_enable="YES"
-# pppoed_interface="em0"
-# pppoed_loadbalancer="YES"
-# pppoed_workers="2"
+# =============================================================================
+# WHEN TO USE WHICH OPTION
+# =============================================================================
 
-# =========================================================================
-# Option 2: 4-worker load balancer (recommended for quad-core)
-# =========================================================================
-# pppoed_enable="YES"
-# pppoed_interface="em0"
-# pppoed_loadbalancer="YES"
-# pppoed_workers="4"
+# Option 1: Basic 2-worker (basic_2workers)
+#   Use when: Testing, low session counts (<500), 2-core systems
+#
+# Option 2: 4-worker (basic_4workers)
+#   Use when: Production, quad-core, moderate sessions (500-2000)
+#
+# Option 3: Auto-scaling (governor_auto)
+#   Use when: Variable load, want automatic scaling
+#
+# Option 4: Hash-based affinity
+#   Use when: Need session persistence (same user -> same worker)
 
-# =========================================================================
-# Option 3: Auto-scaling with CPU governor (up to 8 workers)
-# =========================================================================
-# pppoed_enable="YES"
-# pppoed_interface="em0"
-# pppoed_loadbalancer="YES"
-# pppoed_workers="2"
-# pppoed_governor_max="8"
+# =============================================================================
+# OPTION 1: Basic 2-Worker Load Balancer
+# =============================================================================
+# WHAT: Fixed 2 workers, no auto-scaling
+# CAPACITY: ~1000 sessions
+# USE FOR: Testing, low traffic, 2-core systems
+#
+#pppoed_enable="YES"
+#pppoed_interface="em0"
+#pppoed_flags="-L -w 2"
+#
+# ALTERNATIVE (using rc variables):
+#pppoed_enable="YES"
+#pppoed_interface="em0"
+#pppoed_loadbalancer="YES"
+#pppoed_workers="2"
 
-# =========================================================================
-# Option 3a: Auto-scaling with custom thresholds
-# =========================================================================
-# pppoed_enable="YES"
-# pppoed_interface="em0"
-# pppoed_loadbalancer="YES"
-# pppoed_workers="2"
-# pppoed_governor_min="1"                  # Minimum workers (default: 1)
-# pppoed_governor_max="8"                 # Maximum workers (0=auto/mp_ncpus)
-# pppoed_governor_poll_interval="5"        # Poll interval in seconds
-# pppoed_cpu_threshold="80"               # Scale up at 80% CPU
-# pppoed_cpu_low_threshold="30"           # Scale down at 30% CPU
+# =============================================================================
+# OPTION 2: 4-Worker Load Balancer (RECOMMENDED for quad-core)
+# =============================================================================
+# WHAT: Fixed 4 workers, no auto-scaling
+# CAPACITY: ~2000 sessions
+# USE FOR: Production, quad-core, predictable load
+#
+#pppoed_enable="YES"
+#pppoed_interface="em0"
+#pppoed_flags="-L -w 4"
+#
+# ALTERNATIVE (using rc variables):
+#pppoed_enable="YES"
+#pppoed_interface="em0"
+#pppoed_loadbalancer="YES"
+#pppoed_workers="4"
 
-# =========================================================================
-# Option 4: Hash-based session affinity (persistent sessions)
-# =========================================================================
-# pppoed_enable="YES"
-# pppoed_interface="em0"
-# pppoed_loadbalancer="YES"
-# pppoed_workers="4"
-# pppoed_algorithm="1"    # 0=round-robin, 1=hash, 2=least-loaded
+# =============================================================================
+# OPTION 3: Auto-Scaling with CPU Governor
+# =============================================================================
+# WHAT: Starts with 2 workers, auto-scales up to mp_ncpus (CPU cores)
+# CAPACITY: 500-4000 sessions (scales with load)
+# USE FOR: Variable load, production with peak hours
+#
+#pppoed_enable="YES"
+#pppoed_interface="em0"
+#pppoed_flags="-L -w 2 -G 0 -M 2"
+#
+# This starts with 2 workers, scales up to your CPU core count,
+# and scales down when idle.
 
-# =========================================================================
-# Optional: Specify provider name
-# =========================================================================
-# pppoed_provider="ISP_NAME"
+# =============================================================================
+# OPTION 3a: Auto-Scaling with Custom Thresholds
+# =============================================================================
+# WHAT: Fine-tuned auto-scaling
+# CAPACITY: Configurable
+# USE FOR: Tuning performance for your specific workload
+#
+#pppoed_enable="YES"
+#pppoed_interface="em0"
+#pppoed_flags="-L -w 2 -G 0 -M 2 -I 5 -c 80 -C 30"
+#
+# FLAG REFERENCE:
+#   -L          Enable load balancer mode
+#   -w 2        Start with 2 workers
+#   -G 0        Max workers (0=auto/mp_ncpus, 4=fixed max of 4)
+#   -M 2        Minimum workers (never scales below this)
+#   -I 5        Governor checks every 5 seconds
+#   -c 80       Scale up when CPU > 80%
+#   -C 30       Scale down when CPU < 30%
+#
+# THRESHOLD TUNING:
+#   Aggressive (scales faster):
+#     -c 70 -C 40 -I 3 -G 0
+#   Conservative (fewer changes):
+#     -c 85 -C 20 -I 10 -G 0
 
-# =========================================================================
-# Optional: Specify access concentrator name
-# =========================================================================
-# pppoed_acname="MyAccessConcentrator"
+# =============================================================================
+# OPTION 4: Hash-Based Session Affinity
+# =============================================================================
+# WHAT: Sessions from same MAC address go to same worker
+# CAPACITY: ~2000 sessions
+# USE FOR: When session persistence is required
+#
+#pppoed_enable="YES"
+#pppoed_interface="em0"
+#pppoed_flags="-L -w 4 -a 1"
+#
+# ALGORITHMS:
+#   -a 0  Round-robin     - Simple alternation
+#   -a 1  Hash-based      - Same MAC -> same worker
+#   -a 2  Least-loaded   - Fewest sessions gets next
 
-# =========================================================================
-# Tunable sysctl variables (set in /etc/sysctl.conf)
-# =========================================================================
-# Governor settings
+# =============================================================================
+# OPTIONAL PARAMETERS
+# =============================================================================
+
+# Specify provider name (shown to clients):
+#pppoed_provider="ISP_NAME"
+
+# Specify access concentrator name:
+#pppoed_acname="MyAccessConcentrator"
+
+# Logging:
+#pppoed_log="/var/log/pppoed.log"
+
+# =============================================================================
+# SYSCTL TUNABLES (set in /etc/sysctl.conf)
+# =============================================================================
+# Governor can also be configured via sysctl (runtime changes):
+#
 # net.graph.pppoe_lb.governor.enabled=1
-# net.graph.pppoe_lb.governor.max_workers=8
+# net.graph.pppoe_lb.governor.mode=1
+# net.graph.pppoe_lb.governor.min_workers=2
+# net.graph.pppoe_lb.governor.max_workers=0
 # net.graph.pppoe_lb.governor.cpu_threshold=80
-# net.graph.pppoe_lb.governor.cpu_low_threshold=20
+# net.graph.pppoe_lb.governor.cpu_low_threshold=30
 # net.graph.pppoe_lb.governor.scale_up_interval=5
 # net.graph.pppoe_lb.governor.scale_down_interval=60
+# net.graph.pppoe_lb.governor.drain_timeout=30
 
-# =========================================================================
-# Kernel modules (add to /boot/loader.conf)
-# =========================================================================
+# =============================================================================
+# KERNEL MODULES (add to /boot/loader.conf)
+# =============================================================================
+# These MUST be loaded at boot for pppoed to work:
+#
 # netgraph_load="YES"
 # ng_ether_load="YES"
 # ng_pppoe_load="YES"
 # ng_pppoe_lb_load="YES"
+
+# =============================================================================
+# VERIFICATION
+# =============================================================================
+# After rebooting, verify the system is working:
+#
+# 1. Check kernel module loaded:
+#    kldstat | grep pppoe_lb
+#
+# 2. Check pppoed is running:
+#    ps aux | grep pppoed
+#
+# 3. Check worker count:
+#    sysctl net.graph.pppoe_lb.governor.current_workers
+#
+# 4. Check session count:
+#    sysctl net.graph.pppoe_lb.governor.total_sessions
+
+# =============================================================================
+# EXAMPLE: Full Production Configuration
+# =============================================================================
+# This example shows a production-ready configuration with:
+#   - Auto-scaling 2-8 workers
+#   - Moderate thresholds (scale up at 80%, down at 30%)
+#   - Named access concentrator
+#   - Separate logging
+#
+# /etc/rc.conf:
+#pppoed_enable="YES"
+#pppoed_interface="em0"
+#pppoed_flags="-L -w 2 -G 8 -M 2 -I 5 -c 80 -C 30 -a MyISP"
+#pppoed_log="/var/log/pppoed.log"
+#
+# /etc/sysctl.conf (optional, for persistence):
+#net.graph.pppoe_lb.governor.enabled=1
+#net.graph.pppoe_lb.governor.mode=1
+#
+# /boot/loader.conf:
+#netgraph_load="YES"
+#ng_ether_load="YES"
+#ng_pppoe_load="YES"
+#ng_pppoe_lb_load="YES"

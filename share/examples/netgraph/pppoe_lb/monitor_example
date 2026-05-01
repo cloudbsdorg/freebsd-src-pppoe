@@ -1,45 +1,282 @@
 #
 # PPPoE Load Balancer - Monitoring Examples
+# =========================================
 #
-# These commands demonstrate how to monitor the load balancer.
-# Run with ngctl or as standalone shell commands.
+# WHAT THIS FILE CONTAINS:
+# Commands for monitoring the PPPoE load balancer. Use these to:
+#   - Verify the system is working correctly
+#   - Troubleshoot issues
+#   - Generate reports for capacity planning
 #
+# WHEN TO USE:
+# - Daily health checks
+# - Investigating performance issues
+# - Capacity planning (session counts, bandwidth)
+# - Verifying configuration changes
+#
+# MONITORING APPROACHES:
+#   1. On-demand (run commands manually)
+#   2. Continuous (use watch command)
+#   3. Automated (scripted with cron)
+#   4. Real-time (use pppoe_lb_monitor.sh)
+#
+# =============================================================================
+# SECTION 1: BASIC STATUS CHECKS
+# =============================================================================
+
+# Check if kernel module is loaded
+kldstat | grep pppoe_lb
+# Expected output (if loaded):
+#   15    1 ng_pppoe_lb  ...  -  ng_pppoe_lb.ko
+
+# List all PPPoE-related netgraph nodes
+ngctl list | grep -E '(pppoe|pppoe_lb)'
+# Expected output:
+#   Name pppoe_lb0 type pppoe_lb id 42
+#   Name worker0 type pppoe id 43
+#   Name worker1 type pppoe id 44
+
+# =============================================================================
+# SECTION 2: PERFORMANCE STATISTICS
+# =============================================================================
 
 # View load balancer status and statistics
 ngctl msg pppoe_lb0: getstats
+# Expected output:
+#   Rec'd response "getstats" (3) from "pppoe_lb0:":
+#   Args:   {
+#       sessions=42
+#       workers=2
+#       packets_in=1234567
+#       packets_out=1234500
+#       bytes_in=1234567890
+#       bytes_out=987654321
+#       discards=5
+#       errors=0
+#   }
+#
+# FIELD DESCRIPTIONS:
+#   sessions     - Total active PPPoE sessions
+#   workers      - Number of worker nodes
+#   packets_in   - Packets received from clients
+#   packets_out  - Packets sent to clients
+#   bytes_in     - Total bytes received (cumulative)
+#   bytes_out    - Total bytes sent (cumulative)
+#   discards     - Dropped packets (normal under load)
+#   errors       - Error count (should be 0 or very low)
 
 # View session-to-worker mapping
 ngctl msg pppoe_lb0: getmap
-
-# View detailed node information
-ngctl show pppoe_lb0:
-
-# Display all PPPoE-related netgraph nodes
-ngctl list | grep -E '(pppoe|pppoe_lb)'
-
-# Check governor status via sysctl
-sysctl net.graph.pppoe_lb
-sysctl net.graph.pppoe_lb.governor
-
-# Example output from getstats:
-#
-#   Rec'd response "getstats" (3) from "pppoe_lb0:":
-#   Args:   { sessions=42 workers=2 packets_in=12345 packets_out=12340
-#             discards=0 errors=0 }
-
-# Example output from getmap:
-#
+# Expected output:
 #   Rec'd response "getmap" (4) from "pppoe_lb0:":
-#   Args:   { num_sessions=3 session_info=[
-#     { sid=1234 worker=0 last_activity=1234567890 },
-#     { sid=1235 worker=1 last_activity=1234567891 },
-#     { sid=1236 worker=0 last_activity=1234567892 } ] }
+#   Args:   {
+#       num_sessions=3
+#       session_info=[
+#           { sid=1234 worker=0 last_activity=1234567890 },
+#           { sid=1235 worker=1 last_activity=1234567891 },
+#           { sid=1236 worker=0 last_activity=1234567892 }
+#       ]
+#   }
+#
+# FIELD DESCRIPTIONS:
+#   sid           - Session ID (unique identifier)
+#   worker        - Which worker handles this session (0, 1, 2, ...)
+#   last_activity - Unix timestamp of last packet
 
-# Continuous monitoring (update every 5 seconds)
-# watch -n 5 'ngctl msg pppoe_lb0: getstats'
+# =============================================================================
+# SECTION 3: DETAILED NODE INFORMATION
+# =============================================================================
+
+# View detailed node information and connections
+ngctl show pppoe_lb0:
+# Expected output:
+#   ngctl> show pppoe_lb0:
+#   Rec'd message for 42: "show" {
+#       HOOK            TYPE           NAME           ID   PEER
+#       lower           ether         em0            40   41
+#       link0           pppoe         worker0        43   44
+#       link1           pppoe         worker1        45   46
+#   }
+#
+# Shows how nodes are connected in the netgraph topology
+
+# =============================================================================
+# SECTION 4: GOVERNOR (AUTO-SCALING) STATUS
+# =============================================================================
+
+# View all PPPoE load balancer sysctls
+sysctl net.graph.pppoe_lb
+# Shows all configurable and read-only sysctls
+
+# View governor-specific sysctls
+sysctl net.graph.pppoe_lb.governor
+# Expected output:
+#   net.graph.pppoe_lb.governor.enabled: 1
+#   net.graph.pppoe_lb.governor.mode: 1
+#   net.graph.pppoe_lb.governor.min_workers: 2
+#   net.graph.pppoe_lb.governor.max_workers: 4
+#   net.graph.pppoe_lb.governor.cpu_threshold: 80
+#   net.graph.pppoe_lb.governor.cpu_low_threshold: 20
+#   net.graph.pppoe_lb.governor.current_workers: 2
+#   net.graph.pppoe_lb.governor.active_workers: 2
+#   net.graph.pppoe_lb.governor.draining_workers: 0
+#   net.graph.pppoe_lb.governor.total_sessions: 42
+#   net.graph.pppoe_lb.governor.cpu_usage: 45
+#   net.graph.pppoe_lb.governor.last_decision: none
+#   net.graph.pppoe_lb.governor.last_reason: none
+#
+# FIELD DESCRIPTIONS:
+#   enabled           - Governor enabled (1) or disabled (0)
+#   mode              - 0=manual, 1=auto
+#   min_workers       - Minimum workers (never goes below)
+#   max_workers       - Maximum workers (0=auto/mp_ncpus)
+#   cpu_threshold     - Scale up when CPU > this %
+#   cpu_low_threshold - Scale down when CPU < this %
+#   current_workers   - Current number of workers
+#   active_workers    - Workers in ACTIVE state
+#   draining_workers  - Workers in DRAINING state
+#   total_sessions    - Total active sessions
+#   cpu_usage         - Current CPU usage percentage
+#   last_decision     - Last scaling decision
+#   last_reason      - Reason for last decision
+
+# View per-worker statistics
+sysctl net.graph.pppoe_lb.workers.0
+# Expected output:
+#   net.graph.pppoe_lb.workers.0.state: 0
+#   net.graph.pppoe_lb.workers.0.sessions: 23
+#   net.graph.pppoe_lb.workers.0.bytes_in: 1234567890
+#   net.graph.pppoe_lb.workers.0.bytes_out: 987654321
+#   net.graph.pppoe_lb.workers.0.uptime: 2700
+#
+# WORKER STATE VALUES:
+#   0 = ACTIVE           - Accepting new sessions
+#   1 = DRAINING         - No new sessions, completing existing
+#   2 = PENDING_REMOVAL  - Empty, ready for removal
+
+# =============================================================================
+# SECTION 5: CONTINUOUS MONITORING
+# =============================================================================
+
+# Continuous monitoring (updates every 5 seconds)
+# Press Ctrl+C to stop
+watch -n 5 'ngctl msg pppoe_lb0: getstats'
+
+# Alternative: watch governor status
+watch -n 5 'sysctl net.graph.pppoe_lb.governor | grep -E "(workers|sessions|cpu)"'
+
+# Watch for governor log messages
+tail -f /var/log/messages | grep pppoe_lb
+
+# =============================================================================
+# SECTION 6: CAPACITY PLANNING
+# =============================================================================
+
+# Get total sessions across all workers
+ngctl msg pppoe_lb0: getstats | grep sessions
+# Use this to track growth over time
+
+# Calculate sessions per worker
+python3 -c "
+import subprocess
+import re
+
+stats = subprocess.check_output(['ngctl', 'msg', 'pppoe_lb0:', 'getstats']).decode()
+sess_match = re.search(r'sessions=(\d+)', stats)
+workers_match = re.search(r'workers=(\d+)', stats)
+
+if sess_match and workers_match:
+    sessions = int(sess_match.group(1))
+    workers = int(workers_match.group(1))
+    avg = sessions / workers if workers > 0 else 0
+    print(f'Total sessions: {sessions}')
+    print(f'Workers: {workers}')
+    print(f'Avg per worker: {avg:.1f}')
+"
+
+# =============================================================================
+# SECTION 7: DEBUGGING
+# =============================================================================
 
 # Enable debug logging (temporarily)
 ngctl msg pppoe_lb0: setconfig { algorithm=0 debug=1 }
+# Debug output appears in /var/log/messages
 
-# Check kernel module is loaded
-kldstat | grep pppoe_lb
+# Disable debug logging
+ngctl msg pppoe_lb0: setconfig { algorithm=0 debug=0 }
+
+# Check for errors in statistics
+ngctl msg pppoe_lb0: getstats | grep -E '(errors|discards)'
+# High values may indicate:
+#   errors:   Hardware issues, configuration problems
+#   discards: Normal under high load, or queue overflow
+
+# =============================================================================
+# SECTION 8: USING THE MONITOR SCRIPT
+# =============================================================================
+
+# The comprehensive monitor script provides:
+#   - Console, JSON, CSV, and StatsD output formats
+#   - Colored terminal output
+#   - Historical data tracking
+#   - Alert thresholds
+#
+# Usage:
+#   ./pppoe_lb_monitor.sh --format console
+#   ./pppoe_lb_monitor.sh --format json --interval 10
+#   ./pppoe_lb_monitor.sh --format csv --output /var/log/pppoe_lb.csv
+#
+# See pppoe_lb_monitor.sh for full documentation.
+
+# =============================================================================
+# SECTION 9: HEALTH CHECK SCRIPT
+# =============================================================================
+
+# Quick health check (paste into shell)
+echo "=== PPPoE Load Balancer Health Check ==="
+echo ""
+echo "1. Module loaded:"
+kldstat | grep pppoe_lb && echo "   OK" || echo "   FAILED"
+echo ""
+echo "2. Nodes exist:"
+ngctl list | grep -q pppoe_lb && echo "   OK" || echo "   FAILED"
+echo ""
+echo "3. Governor enabled:"
+sysctl -n net.graph.pppoe_lb.governor.enabled
+echo ""
+echo "4. Worker count:"
+sysctl -n net.graph.pppoe_lb.governor.current_workers
+echo ""
+echo "5. Session count:"
+sysctl -n net.graph.pppoe_lb.governor.total_sessions
+echo ""
+echo "6. CPU usage:"
+sysctl -n net.graph.pppoe_lb.governor.cpu_usage"%
+echo ""
+echo "7. Error count:"
+ngctl msg pppoe_lb0: getstats | grep -o 'errors=[0-9]*'
+echo ""
+
+# =============================================================================
+# COMMON ISSUES AND RESOLUTIONS
+# =============================================================================
+
+# Issue: "No such file or directory" when running ngctl
+# Cause: Kernel module not loaded
+# Fix:   kldload ng_pppoe_lb
+
+# Issue: "Protocol not supported"
+# Cause: Netgraph not available or pppoe_lb node type unknown
+# Fix:   kldload netgraph; kldload ng_pppoe_lb
+
+# Issue: Governor not scaling
+# Cause: Governor disabled or at max workers
+# Fix:   sysctl net.graph.pppoe_lb.governor.enabled=1
+
+# Issue: High error count
+# Cause: Hardware issue, congestion, or configuration problem
+# Fix:   Check network cables, switches, and system resources
+
+# Issue: Unbalanced session distribution
+# Cause: Hash algorithm or draining workers
+# Fix:   Check worker states, consider round-robin algorithm

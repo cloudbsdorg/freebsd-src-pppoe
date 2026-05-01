@@ -1,13 +1,136 @@
 #!/bin/sh
 #
 # PPPoE Load Balancer - 4 Worker Setup
+# =====================================
 #
-# This example creates a load balancer with 4 worker nodes.
-# Recommended for quad-core systems.
+# WHAT THIS DOES:
+# Creates a PPPoE load balancer with exactly 4 worker nodes.
+# Sessions are distributed using round-robin by default.
+# This is the recommended configuration for production use on
+# quad-core systems.
 #
-# Usage: ngctl -f basic_4workers
+# WHEN TO USE:
+# - Production environments with moderate session counts (100-2000)
+# - Quad-core systems with dedicated CPU resources
+# - When consistent, predictable distribution is needed
+# - Systems with moderate CPU utilization
 #
-# Modify ETHER_IFACE to match your Ethernet interface.
+# WHEN NOT TO USE:
+# - Systems with fewer than 4 CPU cores (use basic_2workers)
+# - When auto-scaling is needed (use governor_auto)
+# - Very high session counts (>2000) - consider more workers
+#
+# ARCHITECTURE:
+#
+#   +---------+     +------------+     +---------+
+#   | Ethernet|---->| pppoe_lb   |---->| Worker0 |---> tun0
+#   |  em0   |     |  (lb node) |     +---------+
+#   +---------+     +------------+     +---------+
+#                               +------>| Worker1 |---> tun1
+#                               |       +---------+
+#                               |       +---------+
+#                               +------>| Worker2 |---> tun2
+#                               |       +---------+
+#                               |       +---------+
+#                               +------>| Worker3 |---> tun3
+#                                       +---------+
+#
+# EXPECTED SESSION DISTRIBUTION (round-robin):
+#   Session 1 -> Worker 0
+#   Session 2 -> Worker 1
+#   Session 3 -> Worker 2
+#   Session 4 -> Worker 3
+#   Session 5 -> Worker 0 (cycles back)
+#   ...and so on
+#
+# PREREQUISITES:
+#   kldload netgraph
+#   kldload ng_ether
+#   kldload ng_pppoe
+#   kldload ng_pppoe_lb
+#
+# CAPACITY ESTIMATES:
+#   - ~500 sessions per worker recommended
+#   - This configuration supports: 500 x 4 = 2000 sessions
+#   - Each worker uses approximately 1 CPU core
+#
+# USAGE:
+#   1. Verify you have 4+ CPU cores: sysctl hw.ncpu
+#   2. Modify ETHER_IFACE if needed (default: em0)
+#   3. Run: ngctl -f basic_4workers
+#   4. Verify with: ngctl list | grep pppoe
+#
+# VERIFICATION STEPS:
+#   Step 1: Confirm 4 workers created:
+#     ngctl list | grep worker
+#     Expected: worker0, worker1, worker2, worker3
+#
+#   Step 2: Check session count (should be 0 initially):
+#     ngctl msg pppoe_lb0: getstats
+#     Expected: workers=4, sessions=0
+#
+#   Step 3: Check CPU utilization baseline:
+#     top -b -n 1 | head -20
+#     Note pppoed CPU usage for comparison later
+#
+# EXPECTED OUTPUT after running ngctl -f basic_4workers:
+#
+#   ngctl> show pppoe_lb0:
+#   Rec'd message for 42: "show" {
+#       HOOK            TYPE           NAME           ID   PEER
+#       link0           pppoe          worker0        43   44
+#       link1           pppoe          worker1        45   46
+#       link2           pppoe          worker2        47   48
+#       link3           pppoe          worker3        49   50
+#   }
+#
+# WHAT EACH ngctl COMMAND DOES:
+#   mkpeer $ETHER_IFACE: pppoe_lb lower link0
+#     Creates the central load balancer node that routes sessions to workers.
+#     This is the "director" that decides which worker handles each session.
+#
+#   mkpeer $LB_NODE: pppoe worker{N}
+#     Creates a PPPoE worker node for handling sessions.
+#     Each worker is an independent PPPoE termination point.
+#
+#   mkpeer worker{N}: eiface link{N} pppoe
+#     Creates an Ethernet interface node that bridges PPPoE to a tun interface.
+#     The tun interface is what your routing/switching stack sees.
+#
+# TROUBLESHOOTING:
+#   Problem: Only 2 workers show up
+#     -> Check that previous configuration is cleaned up:
+#        ngctl shutdown pppoe_lb0:
+#        ngctl list | grep pppoe  # Should be empty
+#
+#   Problem: "Too many open files"
+#     -> Increase limits in /etc/login.conf or ulimit
+#     -> Check: sysctl kern.maxfiles
+#
+#   Problem: High CPU on single core
+#     -> The load balancer itself is single-threaded
+#     -> Consider using governor_auto to add workers
+#     -> Or manually add more workers with: ngctl msg pppoe_lb0: addworker
+#
+# SESSION DISTRIBUTION COMPARISON:
+#
+# +------------------+------------------+------------------+
+# | Algorithm        | How it Works     | Best For         |
+# +------------------+------------------+------------------+
+# | round-robin (0)  | Alternates       | Balanced, simple |
+# |                  | between workers  | environments     |
+# +------------------+------------------+------------------+
+# | hash (1)         | Hash of source   | Session affinity |
+# |                  | MAC addresses    | requirements     |
+# +------------------+------------------+------------------+
+# | least-loaded (2)| Fewest sessions  | Variable load    |
+# |                  | gets next        | scenarios        |
+# +------------------+------------------+------------------+
+#
+# To change algorithm at runtime:
+#   ngctl msg pppoe_lb0: setconfig { algorithm=0 }  # Round-robin
+#   ngctl msg pppoe_lb0: setconfig { algorithm=1 }  # Hash-based
+#   ngctl msg pppoe_lb0: setconfig { algorithm=2 }  # Least-loaded
 
 ETHER_IFACE="em0"
 LB_NODE="pppoe_lb0"
@@ -39,5 +162,8 @@ msg $LB_NODE: setconfig { algorithm=0 debug=0 }
 show $LB_NODE:
 list
 
-# To change algorithm at runtime:
-# ngctl msg pppoe_lb0: setconfig { algorithm=1 debug=0 }
+# NEXT STEPS:
+# - Start pppoed: pppoed -L -w 4 em0
+# - Monitor: ngctl msg pppoe_lb0: getstats
+# - Add more workers: ngctl msg pppoe_lb0: addworker
+# - See monitor_example for detailed monitoring

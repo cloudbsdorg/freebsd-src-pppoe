@@ -1,13 +1,113 @@
 #!/bin/sh
 #
 # PPPoE Load Balancer - Basic 2 Worker Setup
+# ==========================================
 #
-# This example creates a load balancer with 2 worker nodes.
-# Suitable for dual-core systems or basic testing.
+# WHAT THIS DOES:
+# Creates a PPPoE load balancer with exactly 2 worker nodes.
+# Sessions are distributed using round-robin algorithm (alternating
+# between workers for each new connection).
 #
-# Usage: ngctl -f basic_2workers
+# WHEN TO USE:
+# - Testing the load balancer for the first time
+# - Dual-core systems with low-to-medium session counts
+# - Development and staging environments
+# - Systems where CPU resources are limited
 #
-# Modify ETHER_IFACE to match your Ethernet interface.
+# WHEN NOT TO USE:
+# - Production with >500 concurrent sessions (use basic_4workers)
+# - High CPU utilization scenarios (use governor_auto)
+# - When session affinity is critical (use hash algorithm)
+#
+# ARCHITECTURE:
+#
+#   Client      Ethernet      Load Balancer      Worker 0       tun0
+#   ------+          |             |                 |           |
+#         |----------+--------+-----+--------+---------+---------+
+#                   |        |     |         |                    |
+#                   |        |     +----+----+                    |
+#                   |        |          |                         |
+#                   +--------+----------+---------+---------------+
+#                                |              |
+#                               Worker 1        tun1
+#
+# EXPECTED SESSION DISTRIBUTION (round-robin):
+#   Session 1 -> Worker 0
+#   Session 2 -> Worker 1
+#   Session 3 -> Worker 0
+#   Session 4 -> Worker 1
+#   ...and so on
+#
+# PREREQUISITES:
+#   kldload netgraph
+#   kldload ng_ether
+#   kldload ng_pppoe
+#   kldload ng_pppoe_lb
+#
+# USAGE:
+#   1. Modify ETHER_IFACE to match your network interface
+#   2. Run: ngctl -f basic_2workers
+#   3. Verify with: ngctl list | grep pppoe
+#
+# VERIFICATION STEPS:
+#   Step 1: After running, check nodes exist:
+#     ngctl list | grep -E '(pppoe_lb|worker)'
+#     Expected output:
+#       Name pppoe_lb0 type pppoe_lb id 42
+#       Name worker0 type pppoe id 43
+#       Name worker1 type pppoe id 44
+#
+#   Step 2: Check worker stats:
+#     ngctl msg pppoe_lb0: getstats
+#     Expected output shows sessions=0, workers=2
+#
+#   Step 3: View netgraph topology:
+#     ngctl show pppoe_lb0:
+#     Expected: Shows link0 connected to worker0, link1 to worker1
+#
+# EXPECTED OUTPUT after running:
+# ++++++++++++++++++++++++++++++++++++++++++++
+# +  PPPoE Load Balancer Configuration      +
+# +  Workers: 2 (worker0, worker1)          +
+# +  Algorithm: round-robin (0)            +
+# +  Interface: em0                       +
+# ++++++++++++++++++++++++++++++++++++++++++++
+#
+# WHAT EACH ngctl COMMAND DOES:
+#   mkpeer $ETHER_IFACE: pppoe_lb lower link0
+#     Creates a pppoe_lb node and connects it to the ethernet interface.
+#     'lower' is the hook name on the ethernet node.
+#     'link0' is the hook name on our new pppoe_lb node.
+#
+#   name $ETHER_IFACE:lower $LB_NODE
+#     Assigns a human-readable name to the node for easier commands.
+#
+#   mkpeer $LB_NODE: pppoe worker0
+#     Creates a pppoe worker node and connects it to the load balancer.
+#     New PPPoE sessions will be routed to this worker.
+#
+#   mkpeer worker0: eiface link0 pppoe
+#     Creates an eiface node to bridge the pppoe session to a tun interface.
+#     This allows the PPPoE session to be used like a normal network interface.
+#
+# TROUBLESHOOTING:
+#   Error: "No such file or directory"
+#     -> Kernel module not loaded. Run kldload commands from prerequisites.
+#
+#   Error: "Protocol not supported"
+#     -> Your kernel may not have netgraph compiled in.
+#     -> Check: sysctl net.graph.version
+#
+#   Error: "Name already exists"
+#     -> A pppoe_lb node already exists.
+#     -> Run: ngctl shutdown pppoe_lb0:
+#     -> Or use a different name: LB_NODE="pppoe_lb1"
+#
+# NEXT STEPS AFTER SUCCESSFUL SETUP:
+#   - Start pppoed daemon: pppoed -L -w 2 em0
+#   - Monitor sessions: ngctl msg pppoe_lb0: getmap
+#   - View statistics: ngctl msg pppoe_lb0: getstats
+#   - See monitor_example for more monitoring commands
 
 ETHER_IFACE="em0"
 LB_NODE="pppoe_lb0"
@@ -31,8 +131,17 @@ msg $LB_NODE: setconfig { algorithm=0 debug=0 }
 show $LB_NODE:
 list
 
-# Notes:
-# - Sessions will be distributed round-robin to worker0 and worker1
-# - Each worker creates a tun interface (tun0, tun1, etc.)
-# - Use 'ngctl msg pppoe_lb0: getstats' to view statistics
-# - Use 'ngctl msg pppoe_lb0: getmap' to view session mapping
+# Session Distribution Notes:
+# - Round-robin sends each new session to the next worker in sequence
+# - Session 1 -> worker0, Session 2 -> worker1, Session 3 -> worker0, etc.
+# - Existing sessions are NOT migrated when using round-robin
+# - Each worker maintains its own session affinity (none by default)
+#
+# To change algorithm later:
+#   ngctl msg pppoe_lb0: setconfig { algorithm=1 debug=0 }  # Hash-based
+#   ngctl msg pppoe_lb0: setconfig { algorithm=2 debug=0 }  # Least-loaded
+#
+# Available Algorithms:
+#   algorithm=0 (round-robin): Simple alternation, lowest CPU overhead
+#   algorithm=1 (hash):        Same source MAC -> same worker (session affinity)
+#   algorithm=2 (least-loaded): Send to worker with fewest active sessions
