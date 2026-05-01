@@ -514,9 +514,121 @@ test_debug_level() {
     return 0
 }
 
-# Test 11: Memory leak check (basic)
+# Test 11: Governor scaling decision verification
+test_governor_scaling_decision() {
+    log_info "Test 11: Governor scaling decision verification"
+    
+    load_modules || return 1
+    
+    # Enable governor in auto mode
+    sysctl net.graph.pppoe_lb.governor.enabled=1
+    sysctl net.graph.pppoe_lb.governor.mode=1
+    
+    # Set extreme thresholds to trigger scale up
+    sysctl net.graph.pppoe_lb.governor.cpu_threshold=10
+    
+    # Verify governor is enabled
+    ENABLED=$(sysctl -n net.graph.pppoe_lb.governor.enabled)
+    MODE=$(sysctl -n net.graph.pppoe_lb.governor.mode)
+    
+    if [ "$ENABLED" != "1" ] || [ "$MODE" != "1" ]; then
+        log_error "Governor not properly enabled"
+        unload_modules
+        return 1
+    fi
+    
+    # Reset to default thresholds
+    sysctl net.graph.pppoe_lb.governor.cpu_threshold=80
+    sysctl net.graph.pppoe_lb.governor.enabled=0
+    
+    unload_modules
+    
+    log_info "Test 11: PASSED"
+    return 0
+}
+
+# Test 12: Per-worker metrics verification
+test_per_worker_metrics() {
+    log_info "Test 12: Per-worker metrics verification"
+    
+    load_modules || return 1
+    
+    # Check if worker 0 has expected metrics
+    WORKER0_STATE=$(sysctl -n net.graph.pppoe_lb.workers.0.state 2>/dev/null || echo "N/A")
+    WORKER0_SESSIONS=$(sysctl -n net.graph.pppoe_lb.workers.0.sessions 2>/dev/null || echo "N/A")
+    
+    # Verify state is valid (0=ACTIVE, 1=DRAINING, 2=PENDING_REMOVAL)
+    if [ "$WORKER0_STATE" != "N/A" ]; then
+        if [ "$WORKER0_STATE" -lt 0 ] || [ "$WORKER0_STATE" -gt 2 ]; then
+            log_error "Worker 0 state invalid: $WORKER0_STATE"
+            unload_modules
+            return 1
+        fi
+        
+        # Sessions should be non-negative
+        if [ "$WORKER0_SESSIONS" -lt 0 ]; then
+            log_error "Worker 0 sessions negative: $WORKER0_SESSIONS"
+            unload_modules
+            return 1
+        fi
+        
+        log_info "Worker 0: state=$WORKER0_STATE, sessions=$WORKER0_SESSIONS"
+    fi
+    
+    unload_modules
+    
+    log_info "Test 12: PASSED"
+    return 0
+}
+
+# Test 13: Governor intervals configuration
+test_governor_intervals() {
+    log_info "Test 13: Governor intervals configuration"
+    
+    load_modules || return 1
+    
+    # Configure intervals
+    sysctl net.graph.pppoe_lb.governor.scale_up_interval=10
+    sysctl net.graph.pppoe_lb.governor.scale_down_interval=60
+    sysctl net.graph.pppoe_lb.governor.drain_timeout=30
+    
+    # Verify intervals
+    SCALE_UP=$(sysctl -n net.graph.pppoe_lb.governor.scale_up_interval)
+    SCALE_DOWN=$(sysctl -n net.graph.pppoe_lb.governor.scale_down_interval)
+    DRAIN=$(sysctl -n net.graph.pppoe_lb.governor.drain_timeout)
+    
+    if [ "$SCALE_UP" != "10" ]; then
+        log_error "Scale up interval not set correctly"
+        unload_modules
+        return 1
+    fi
+    
+    if [ "$SCALE_DOWN" != "60" ]; then
+        log_error "Scale down interval not set correctly"
+        unload_modules
+        return 1
+    fi
+    
+    if [ "$DRAIN" != "30" ]; then
+        log_error "Drain timeout not set correctly"
+        unload_modules
+        return 1
+    fi
+    
+    # Reset to defaults
+    sysctl net.graph.pppoe_lb.governor.scale_up_interval=10
+    sysctl net.graph.pppoe_lb.governor.scale_down_interval=60
+    sysctl net.graph.pppoe_lb.governor.drain_timeout=30
+    
+    unload_modules
+    
+    log_info "Test 13: PASSED"
+    return 0
+}
+
+# Test 14: Memory leak check (basic)
 test_memory_leak() {
-    log_info "Test 11: Basic memory leak check"
+    log_info "Test 14: Basic memory leak check"
     
     load_modules || return 1
     
@@ -542,7 +654,7 @@ test_memory_leak() {
     
     unload_modules
     
-    log_info "Test 11: PASSED (no obvious leaks)"
+    log_info "Test 14: PASSED (no obvious leaks)"
     return 0
 }
 
@@ -629,6 +741,24 @@ main() {
     fi
     
     if test_debug_level; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    
+    if test_governor_scaling_decision; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    
+    if test_per_worker_metrics; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    
+    if test_governor_intervals; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
