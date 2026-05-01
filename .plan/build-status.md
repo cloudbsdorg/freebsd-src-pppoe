@@ -1,9 +1,10 @@
 # Multithreaded PPPoE Build Status
 
 **Date:** 2026-05-01
-**Branch:** feature/multithreaded-pppoe (to be created)  
+**Branch:** main (feature/multithreaded-pppoe merged)  
 **Target:** FreeBSD 16  
 **Author:** Mark LaPointe <mark@cloudbsd.org>  
+**Status:** Implementation Complete - Testing Phase
 
 ---
 
@@ -274,44 +275,51 @@ pppoed -L -w 8 -G 8 -A 1
 
 ## Known Issues / TODO
 
-1. **Governor worker creation:** Governor logs scale-up/scale-down intent but does not actually create/destroy workers. This requires userland coordination (ngctl or pppoed).
+1. **Testing:** All test scripts implemented but require VM environment for execution. Unit tests, regression tests, integration tests, and stress tests ready for validation.
 
-2. **CPU monitoring granularity:** Governor uses system-wide CPU stats, not per-worker. This is intentional to avoid oversubscription but may not reflect actual PPPoE workload.
+2. **pppoetest:** Production-safe diagnostic tool implemented with sensible defaults (diagnose mode, 20% threshold, 5s interval). Client-server mode documented but not fully implemented.
 
-3. **Testing gaps:** Unit tests, performance tests, and stress tests are not yet implemented or run.
+3. **Documentation:** Handbook section added to freebsd-doc. Example configurations enhanced with detailed explanations.
 
-4. **Documentation:** Man pages (`pppoed.8`, `ng_pppoe_lb.4`, `ngctl.8`) need updates.
+4. **Outstanding items from plan:**
+   - Phase 3.8: Additional monitoring tools
+   - Phase 4: PPP daemon client-side modifications (optional)
+   - Phase 5: Per-session locking (optional, higher risk)
 
-5. **rc.d integration:** Startup script and rc.conf variables not yet implemented.
+5. **VM testing required:** All kernel module testing must be performed in VM environment with snapshot capability.
 
 ---
 
 ## Next Steps
 
-1. **Complete code review** (Task 1.25)
-   - Verify style(9) compliance
-   - Check locking correctness
-   - Review comments and documentation
+1. **VM Testing (Critical)**
+   - Set up VM with FreeBSD and snapshot capability
+   - Copy kernel module and test scripts to VM
+   - Run `tests/netgraph/ng_pppoe_lb_vm_test.sh`
+   - Run `tests/netgraph/ng_pppoe_lb_unit_test.sh`
+   - Run `tests/netgraph/ng_pppoe_lb_regression_test.sh`
+   - Run `tests/netgraph/ng_pppoe_lb_config_test.sh`
+   - Run `tests/netgraph/ng_pppoe_lb_integration_test.sh`
 
-2. **Create feature branch and commit**
-   - `git checkout -b feature/multithreaded-pppoe`
-   - Add all files with proper author: `Mark LaPointe <mark@cloudbsd.org>`
-   - Commit with descriptive message
+2. **pppoetest Validation**
+   - Compile pppoetest in VM
+   - Test diagnose mode on existing pppoed
+   - Validate output formats (JSON, JSONL, CSV, TAP)
+   - Test configurable thresholds
 
-3. **Set up VM test environment**
-   - Create bhyve/QEMU VM with network support
-   - Take snapshot for rollback
-   - Copy kernel module and test scripts
+3. **Performance Testing**
+   - Single-worker baseline throughput
+   - Multi-worker (2, 4, 8, 12) throughput comparison
+   - Governor scale-up/scale-down timing
 
-4. **Run integration tests** (Task 1.13)
-   - Execute `tests/netgraph/ng_pppoe_lb_vm_test.sh` in VM
-   - Verify all test cases pass
-   - Document results
+4. **Documentation Review**
+   - Review handbook section in freebsd-doc
+   - Add any missing examples
+   - Ensure troubleshooting guide is complete
 
-5. **Continue with Phase 2-6 tasks**
-   - Update man pages
-   - Implement rc.d integration
-   - Add remaining monitoring tools
+5. **Submit for Review**
+   - Create pull request to freebsd-src
+   - Address any code review feedback
 
 ---
 
