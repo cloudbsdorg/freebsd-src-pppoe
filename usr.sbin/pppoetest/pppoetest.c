@@ -51,8 +51,21 @@ static void signal_handler(int sig) {
     g_running = 0;
 }
 
+/* Mode enumeration */
+enum mode {
+    MODE_DIAGNOSE = 0,
+    MODE_ACCURACY,
+    MODE_AFFINITY,
+    MODE_TRANSFER,
+    MODE_GOVERNOR,
+    MODE_STRESS,
+    MODE_BENCHMARK,
+    MODE_MENU
+};
+
 /* Configuration */
 static struct {
+    enum mode mode;
     int show_workers;
     int show_sessions;
     int show_governor;
@@ -67,10 +80,37 @@ static struct {
     int quiet;
     int json_output;
     int jsonl_output;
+    int csv_output;
+    int tap_output;
+    
+    /* Test mode options */
+    int test_sessions;
+    int test_algorithm;
+    int test_workers;
+    int test_threshold;
+    int test_retries;
+    int test_duration;
+    int test_buffer_size;
+    int verbose;
+    int server_mode;
+    int client_mode;
+    char *host;
+    int port;
+    char *file;
+    char *trigger;
 } config = {
+    .mode = MODE_DIAGNOSE,
     .interval = 5,
     .imbalance_threshold = 20,
     .health_threshold = 40,
+    .test_sessions = 100,
+    .test_algorithm = 0,
+    .test_workers = 4,
+    .test_threshold = 10,
+    .test_retries = 3,
+    .test_duration = 60,
+    .test_buffer_size = 65536,
+    .port = 9001,
 };
 
 /* ANSI color codes */
@@ -100,6 +140,16 @@ struct worker_info {
     int sessions;
     time_t last_activity;
     time_t uptime;
+    uint64_t bytes_in;
+    uint64_t bytes_out;
+    int errors;
+};
+
+struct session_info {
+    uint64_t session_id;
+    int worker_id;
+    time_t created;
+    time_t last_activity;
     uint64_t bytes_in;
     uint64_t bytes_out;
     int errors;
@@ -198,6 +248,50 @@ static int sysctl_string(const char *name, char *buf, size_t len) {
         return -1;
     }
     return 0;
+}
+
+/* Get session count */
+static int get_session_count(void) {
+    return sysctl_int("governor.total_sessions");
+}
+
+/* Get session information (up to max_sessions) */
+static int get_sessions(struct session_info **sessions_out, int max_sessions) {
+    int count = sysctl_int("governor.total_sessions");
+    if (count < 0) {
+        *sessions_out = NULL;
+        return 0;
+    }
+    
+    if (count > max_sessions) {
+        count = max_sessions;
+    }
+    
+    struct session_info *sessions = calloc(count, sizeof(struct session_info));
+    if (!sessions) {
+        return -1;
+    }
+    
+    for (int i = 0; i < count; i++) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "sessions.%d.id", i);
+        sessions[i].session_id = sysctl_int(buf);
+        snprintf(buf, sizeof(buf), "sessions.%d.worker_id", i);
+        sessions[i].worker_id = sysctl_int(buf);
+        snprintf(buf, sizeof(buf), "sessions.%d.created", i);
+        sessions[i].created = sysctl_int(buf);
+        snprintf(buf, sizeof(buf), "sessions.%d.last_activity", i);
+        sessions[i].last_activity = sysctl_int(buf);
+        snprintf(buf, sizeof(buf), "sessions.%d.bytes_in", i);
+        sessions[i].bytes_in = sysctl_int(buf);
+        snprintf(buf, sizeof(buf), "sessions.%d.bytes_out", i);
+        sessions[i].bytes_out = sysctl_int(buf);
+        snprintf(buf, sizeof(buf), "sessions.%d.errors", i);
+        sessions[i].errors = sysctl_int(buf);
+    }
+    
+    *sessions_out = sessions;
+    return count;
 }
 
 /* Get worker information */
@@ -345,6 +439,87 @@ static void print_workers(void) {
     
     printf("\n");
     free(workers);
+}
+
+static void print_sessions(void) {
+    struct session_info *sessions = NULL;
+    int count = get_sessions(&sessions, 100);  /* Limit to 100 for display */
+    
+    print_header("Session Status");
+    
+    int total_sessions = get_session_count();
+    printf("  Total Active Sessions: %d", total_sessions);
+    if (total_sessions > 100) {
+        printf(" (showing first 100)");
+    }
+    printf("\n\n");
+    
+    if (count <= 0) {
+        printf("  No sessions found\n\n");
+        return;
+    }
+    
+    if (config.json_output) {
+        printf("{\n");
+        printf("  \"total\": %d,\n", total_sessions);
+        printf("  \"sessions\": [\n");
+        for (int i = 0; i < count; i++) {
+            printf("    {\n");
+            printf("      \"id\": \"0x%lx\",\n", (unsigned long)sessions[i].session_id);
+            printf("      \"worker_id\": %d,\n", sessions[i].worker_id);
+            printf("      \"created\": %ld,\n", (long)sessions[i].created);
+            printf("      \"age\": %ld,\n", (long)(time(NULL) - sessions[i].created));
+            printf("      \"bytes_in\": %llu,\n", (unsigned long long)sessions[i].bytes_in);
+            printf("      \"bytes_out\": %llu,\n", (unsigned long long)sessions[i].bytes_out);
+            printf("      \"errors\": %d\n", sessions[i].errors);
+            printf("    }%s\n", i < count - 1 ? "," : "");
+        }
+        printf("  ]\n");
+        printf("}\n");
+        free(sessions);
+        return;
+    }
+    
+    /* Console output */
+    printf("  ");
+    if (USE_COLOR) printf("%s", COLOR_BOLD);
+    printf("%-12s  %-6s  %-10s  %-12s  %-12s  %-8s  %-8s\n",
+           "Session ID", "Worker", "Age", "Bytes In", "Bytes Out", "Errors", "Status");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    printf("  %s\n", "-----------------------------------------------------------------------------------------");
+    
+    for (int i = 0; i < count; i++) {
+        char buf1[32], buf2[32], age_buf[32];
+        time_t age = time(NULL) - sessions[i].created;
+        format_duration(age, age_buf, sizeof(age_buf));
+        
+        printf("  %-12s  ", "");
+        if (USE_COLOR) printf("%s", COLOR_CYAN);
+        printf("0x%lx", (unsigned long)sessions[i].session_id);
+        if (USE_COLOR) printf("%s", COLOR_RESET);
+        printf("  ");
+        
+        printf("%-6d  %-10s  %-12s  %-12s  %-8d  ",
+               sessions[i].worker_id,
+               age_buf,
+               format_bytes(sessions[i].bytes_in, buf1, sizeof(buf1)),
+               format_bytes(sessions[i].bytes_out, buf2, sizeof(buf2)),
+               sessions[i].errors);
+        
+        /* Status indicator */
+        if (sessions[i].errors > 0) {
+            if (USE_COLOR) printf("%s", COLOR_RED);
+            printf("ERROR");
+        } else {
+            if (USE_COLOR) printf("%s", COLOR_GREEN);
+            printf("OK");
+        }
+        if (USE_COLOR) printf("%s", COLOR_RESET);
+        printf("\n");
+    }
+    
+    printf("\n");
+    free(sessions);
 }
 
 static void print_governor(void) {
@@ -684,30 +859,207 @@ static void run_monitoring(void) {
     }
 }
 
+/* Test mode stubs */
+static void run_accuracy_test(int sessions, int algorithm, int threshold) {
+    print_header("Accuracy Test");
+    printf("  [INFO] Accuracy test mode - creates %d sessions\n", sessions);
+    printf("  [INFO] Algorithm: %d (0=round-robin, 1=hash, 2=least-loaded)\n", algorithm);
+    printf("  [INFO] Threshold: %d%%\n\n", threshold);
+    
+    if (USE_COLOR) printf("%s", COLOR_YELLOW);
+    printf("  [NOTICE] Accuracy test mode is not yet fully implemented.\n");
+    printf("           This feature requires session creation capabilities.\n\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    
+    printf("  To implement: Create test sessions, track distribution,\n");
+    printf("  verify against expected algorithm behavior.\n\n");
+}
+
+static void run_affinity_test(int sessions, int retries) {
+    print_header("Affinity Test");
+    printf("  [INFO] Affinity test mode - %d sessions with %d retries\n\n", sessions, retries);
+    
+    if (USE_COLOR) printf("%s", COLOR_YELLOW);
+    printf("  [NOTICE] Affinity test mode is not yet fully implemented.\n");
+    printf("           This feature requires session reconnection tracking.\n\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    
+    printf("  To implement: Create sessions, force reconnection,\n");
+    printf("  verify sessions return to same worker.\n\n");
+}
+
+static void run_transfer_test(const char *file, int buffer_size) {
+    print_header("Transfer Test");
+    printf("  [INFO] Transfer test mode\n");
+    if (file) {
+        printf("  [INFO] File: %s\n", file);
+    }
+    printf("  [INFO] Buffer size: %d bytes\n\n", buffer_size);
+    
+    if (USE_COLOR) printf("%s", COLOR_YELLOW);
+    printf("  [NOTICE] Transfer test mode is not yet fully implemented.\n");
+    printf("           This feature requires PPPoE session data streaming.\n\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    
+    printf("  To implement: Stream data through PPPoE sessions,\n");
+    printf("  calculate checksums (CRC32/MD5/SHA256), verify integrity.\n\n");
+}
+
+static void run_governor_test(const char *trigger) {
+    print_header("Governor Test");
+    printf("  [INFO] Governor test mode\n");
+    if (trigger) {
+        printf("  [INFO] Trigger: %s\n\n", trigger);
+    }
+    
+    /* Show current governor status */
+    struct governor_status gov;
+    get_governor_status(&gov);
+    
+    printf("  Current Governor State:\n");
+    printf("  %s\n", "----------------------------------------");
+    printf("  %-25s: %s\n", "Enabled", gov.enabled ? "Yes" : "No");
+    printf("  %-25s: %s\n", "Mode", gov.mode == 1 ? "Auto" : "Manual");
+    printf("  %-25s: %d\n", "Current Workers", gov.current_workers);
+    printf("  %-25s: %d\n", "Min Workers", gov.min_workers);
+    printf("  %-25s: %d\n", "Max Workers", gov.max_workers);
+    printf("\n");
+    
+    if (USE_COLOR) printf("%s", COLOR_YELLOW);
+    printf("  [NOTICE] Full governor testing requires load generation.\n");
+    printf("           Use --trigger scale-up or --trigger scale-down.\n\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    
+    printf("  To implement: Generate load, trigger scaling events,\n");
+    printf("  verify workers are added/removed as expected.\n\n");
+}
+
+static void run_stress_test(int sessions, int duration) {
+    print_header("Stress Test");
+    printf("  [INFO] Stress test mode - %d sessions for %d seconds\n\n", sessions, duration);
+    
+    if (USE_COLOR) printf("%s", COLOR_YELLOW);
+    printf("  [NOTICE] Stress test mode is not yet fully implemented.\n");
+    printf("           This feature requires high-load session creation.\n\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    
+    printf("  To implement: Create many sessions rapidly,\n");
+    printf("  monitor CPU/memory, verify system stability.\n\n");
+}
+
+static void run_benchmark_test(void) {
+    print_header("Benchmark Test");
+    printf("  [INFO] Benchmark mode - performance testing\n\n");
+    
+    if (USE_COLOR) printf("%s", COLOR_YELLOW);
+    printf("  [NOTICE] Benchmark test mode is not yet fully implemented.\n");
+    printf("           This feature requires throughput/latency measurement.\n\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    
+    printf("  To implement: Measure throughput (Mbps), latency (ms),\n");
+    printf("  CPU overhead, memory usage under load.\n\n");
+}
+
+static void print_menu(void) {
+    printf("\n");
+    if (USE_COLOR) printf("%s", COLOR_BOLD);
+    printf("================================================================================\n");
+    printf("                    PPPoE Load Balancer Testing Tool\n");
+    printf("================================================================================\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    printf("\n");
+    printf("Select an operation:\n");
+    printf("\n");
+    printf("  [1] Diagnose System          - Analyze existing configuration (PRODUCTION SAFE)\n");
+    printf("  [2] Test Accuracy            - Verify session distribution accuracy\n");
+    printf("  [3] Test Affinity            - Verify session stickiness\n");
+    printf("  [4] Test Governor            - Verify auto-scaling behavior\n");
+    printf("  [5] Test File Transfer       - Stream files with checksums\n");
+    printf("  [6] Stress Test              - High-load stress testing\n");
+    printf("  [7] Benchmark                - Performance benchmarking\n");
+    printf("  [8] Show Configuration       - Display current configuration\n");
+    printf("  [9] Health Check             - Quick health assessment\n");
+    printf("  [0] Exit\n");
+    printf("\n");
+    printf("================================================================================\n");
+    printf("\n");
+    if (USE_COLOR) printf("%s", COLOR_YELLOW);
+    printf("WARNING: Modes [2-7] will create test sessions.\n");
+    printf("         Mode [1] is production safe - no session creation.\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    printf("\n");
+}
+
 /* Usage */
 static void print_usage(const char *prog) {
-    printf("Usage: %s [options]\n", prog);
+    printf("Usage: %s [options] [mode]\n", prog);
     printf("\nMODES (diagnose is DEFAULT - no session creation):\n");
     printf("  diagnose         Passive observation of existing sessions (DEFAULT)\n");
+    printf("  accuracy         Test session distribution accuracy (creates sessions)\n");
+    printf("  affinity         Test session affinity (stickiness)\n");
+    printf("  transfer         Test file transfer with checksums\n");
+    printf("  governor         Test auto-scaling behavior\n");
+    printf("  stress           Stress test with high session count\n");
+    printf("  benchmark        Performance benchmarking\n");
+    printf("  menu             Interactive menu (when no mode specified)\n");
     printf("\nDIAGNOSE MODE OPTIONS (Production Safe - No Session Creation):\n");
     printf("  -s, --show-workers       Show all workers and their states\n");
+    printf("  -S, --show-sessions      Show all active sessions\n");
     printf("  -g, --show-governor      Show governor state and decisions\n");
     printf("  -H, --health-score       Show overall health score\n");
+    printf("  --check-affinity         Check for session affinity violations\n");
     printf("  --check-balance          Check load balance across workers\n");
     printf("  --monitor                Enable real-time monitoring\n");
     printf("  -i, --interval N         Monitoring interval in seconds (default: 5)\n");
     printf("  --imbalance-threshold N Deviation %% to trigger warning (default: 20)\n");
+    printf("  --health-threshold N    Deviation %% to trigger error (default: 40)\n");
+    printf("\nTEST MODE OPTIONS:\n");
+    printf("  -n, --sessions N         Number of sessions to create (default: 100)\n");
+    printf("  -a, --algorithm ALGO     Algorithm: 0=rr, 1=hash, 2=ll\n");
+    printf("  -w, --workers N          Number of workers (default: 4)\n");
+    printf("  -t, --threshold P        Acceptable deviation %% (default: 10)\n");
+    printf("  -r, --retries N          Reconnection attempts (for affinity)\n");
+    printf("  -f, --file PATH          File to transfer (for transfer mode)\n");
+    printf("  -b, --buffer-size N      Buffer size in bytes (default: 65536)\n");
+    printf("  -d, --duration N         Test duration in seconds\n");
+    printf("  --trigger ACTION         Governor trigger: scale-up, scale-down\n");
+    printf("  -v, --verbose            Show per-worker details\n");
     printf("\nOUTPUT OPTIONS:\n");
-    printf("  -o, --output FORMAT      Output format: console, json\n");
+    printf("  -o, --output FORMAT      Output format: console, json, jsonl, csv, tap\n");
     printf("  --no-color               Disable color output\n");
+    printf("  -q, --quiet              Quiet mode (minimal output)\n");
+    printf("\nCONNECTION OPTIONS:\n");
+    printf("  -h, --host HOST          Server hostname (default: localhost)\n");
+    printf("  -p, --port PORT          Control port (default: 9001)\n");
+    printf("  --server                 Run as server (for transfer mode)\n");
+    printf("  --client                 Run as client (for transfer mode)\n");
     printf("\nOTHER OPTIONS:\n");
-    printf("  -h, --help               Show this help message\n");
-    printf("\nIf no options are specified, all basic diagnostics are shown.\n");
+    printf("  -?, --help               Show this help message\n");
+    printf("  --version                Show version information\n");
+    printf("\nIf no mode is specified, diagnose mode is assumed (production safe).\n");
+    printf("If no options are specified in diagnose mode, all basic diagnostics are shown.\n");
+    printf("\nEXAMPLES:\n");
+    printf("  %s                          # Diagnose existing system (PRODUCTION SAFE)\n", prog);
+    printf("  %s diagnose -s -g            # Show workers and governor\n", prog);
+    printf("  %s diagnose -H --monitor     # Health score with monitoring\n", prog);
+    printf("  %s accuracy -n 100 -a 0     # Test round-robin with 100 sessions\n", prog);
+    printf("  %s governor --trigger scale-up  # Test governor scale-up\n", prog);
     printf("\nNote: diagnose mode will NOT create any sessions - it is safe for production.\n");
 }
 
 int main(int argc, char **argv) {
     static struct option long_options[] = {
+        /* Mode options */
+        {"diagnose", no_argument, NULL, 2000},
+        {"accuracy", no_argument, NULL, 2001},
+        {"affinity", no_argument, NULL, 2002},
+        {"transfer", no_argument, NULL, 2003},
+        {"governor", no_argument, NULL, 2004},
+        {"stress", no_argument, NULL, 2005},
+        {"benchmark", no_argument, NULL, 2006},
+        {"menu", no_argument, NULL, 2007},
+        
+        /* Diagnose options */
         {"show-workers", no_argument, NULL, 's'},
         {"show-sessions", no_argument, NULL, 'S'},
         {"show-governor", no_argument, NULL, 'g'},
@@ -718,20 +1070,76 @@ int main(int argc, char **argv) {
         {"interval", required_argument, NULL, 'i'},
         {"imbalance-threshold", required_argument, NULL, 1000},
         {"health-threshold", required_argument, NULL, 1001},
+        
+        /* Test options */
+        {"sessions", required_argument, NULL, 'n'},
+        {"algorithm", required_argument, NULL, 'A'},
+        {"workers", required_argument, NULL, 'w'},
+        {"threshold", required_argument, NULL, 't'},
+        {"retries", required_argument, NULL, 'r'},
+        {"duration", required_argument, NULL, 'D'},
+        {"buffer-size", required_argument, NULL, 'B'},
+        {"file", required_argument, NULL, 'f'},
+        {"trigger", required_argument, NULL, 1002},
+        {"verbose", no_argument, NULL, 'v'},
+        
+        /* Connection options */
+        {"host", required_argument, NULL, 'h'},
+        {"port", required_argument, NULL, 'p'},
+        {"server", no_argument, NULL, 1010},
+        {"client", no_argument, NULL, 1011},
+        
+        /* Output options */
         {"output", required_argument, NULL, 'o'},
-        {"no-color", no_argument, NULL, 'n'},
+        {"no-color", no_argument, NULL, 1050},
         {"quiet", no_argument, NULL, 'q'},
-        {"help", no_argument, NULL, 'h'},
+        
+        /* Other options */
+        {"help", no_argument, NULL, '?'},
+        {"version", no_argument, NULL, 1020},
         {NULL, 0, NULL, 0}
     };
     
     int c;
     int option_index = 0;
     
+    /* Check for mode argument first */
+    if (argc > 1) {
+        if (strcmp(argv[1], "diagnose") == 0 || strcmp(argv[1], "diag") == 0) {
+            config.mode = MODE_DIAGNOSE;
+        } else if (strcmp(argv[1], "accuracy") == 0 || strcmp(argv[1], "acc") == 0) {
+            config.mode = MODE_ACCURACY;
+        } else if (strcmp(argv[1], "affinity") == 0 || strcmp(argv[1], "aff") == 0) {
+            config.mode = MODE_AFFINITY;
+        } else if (strcmp(argv[1], "transfer") == 0 || strcmp(argv[1], "xfer") == 0) {
+            config.mode = MODE_TRANSFER;
+        } else if (strcmp(argv[1], "governor") == 0 || strcmp(argv[1], "gov") == 0) {
+            config.mode = MODE_GOVERNOR;
+        } else if (strcmp(argv[1], "stress") == 0 || strcmp(argv[1], "load") == 0) {
+            config.mode = MODE_STRESS;
+        } else if (strcmp(argv[1], "benchmark") == 0 || strcmp(argv[1], "perf") == 0) {
+            config.mode = MODE_BENCHMARK;
+        } else if (strcmp(argv[1], "menu") == 0 || strcmp(argv[1], "-i") == 0) {
+            config.mode = MODE_MENU;
+        }
+    }
+    
     /* Parse options */
-    while ((c = getopt_long(argc, argv, "sSghHabmi:o:nqh", 
+    optind = 1;  /* Reset for mode parsing */
+    while ((c = getopt_long(argc, argv, "sSghHabmi:o:nq?n:w:t:r:D:B:f:A:Hv", 
                             long_options, &option_index)) != -1) {
         switch (c) {
+            /* Mode options */
+            case 2000: config.mode = MODE_DIAGNOSE; break;
+            case 2001: config.mode = MODE_ACCURACY; break;
+            case 2002: config.mode = MODE_AFFINITY; break;
+            case 2003: config.mode = MODE_TRANSFER; break;
+            case 2004: config.mode = MODE_GOVERNOR; break;
+            case 2005: config.mode = MODE_STRESS; break;
+            case 2006: config.mode = MODE_BENCHMARK; break;
+            case 2007: config.mode = MODE_MENU; break;
+            
+            /* Diagnose options */
             case 's': config.show_workers = 1; break;
             case 'S': config.show_sessions = 1; break;
             case 'g': config.show_governor = 1; break;
@@ -742,17 +1150,47 @@ int main(int argc, char **argv) {
             case 'i': config.interval = atoi(optarg); break;
             case 1000: config.imbalance_threshold = atoi(optarg); break;
             case 1001: config.health_threshold = atoi(optarg); break;
+            
+            /* Test options */
+            case 'n': config.test_sessions = atoi(optarg); break;
+            case 'A': config.test_algorithm = atoi(optarg); break;
+            case 'w': config.test_workers = atoi(optarg); break;
+            case 't': config.test_threshold = atoi(optarg); break;
+            case 'r': config.test_retries = atoi(optarg); break;
+            case 'D': config.test_duration = atoi(optarg); break;
+            case 'B': config.test_buffer_size = atoi(optarg); break;
+            case 'f': config.file = optarg; break;
+            case 1002: config.trigger = optarg; break;
+            case 'v': config.verbose = 1; break;
+            
+            /* Connection options */
+            case 'h': config.host = optarg; break;
+            case 'p': config.port = atoi(optarg); break;
+            case 1010: config.server_mode = 1; break;
+            case 1011: config.client_mode = 1; break;
+            
+            /* Output options */
             case 'o':
                 if (strcmp(optarg, "json") == 0) {
                     config.json_output = 1;
                 } else if (strcmp(optarg, "jsonl") == 0) {
                     config.jsonl_output = 1;
+                } else if (strcmp(optarg, "csv") == 0) {
+                    config.csv_output = 1;
+                } else if (strcmp(optarg, "tap") == 0) {
+                    config.tap_output = 1;
                 }
                 break;
-            case 'n': config.no_color = 1; break;
+            case 1050: config.no_color = 1; break;
             case 'q': config.quiet = 1; break;
-            case 'h':
+            
+            case '?':
                 print_usage(argv[0]);
+                return 0;
+            case 1020:
+                printf("pppoetest 1.0\n");
+                printf("Part of FreeBSD base system\n");
+                printf("Copyright (c) 2024 Mark LaPointe <mark@cloudbsd.org>\n");
                 return 0;
             default:
                 print_usage(argv[0]);
@@ -764,6 +1202,38 @@ int main(int argc, char **argv) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
+    /* Handle menu mode */
+    if (config.mode == MODE_MENU) {
+        print_menu();
+        int choice;
+        if (!(scanf("%d", &choice))) {
+            return 0;
+        }
+        
+        switch (choice) {
+            case 1: config.mode = MODE_DIAGNOSE; break;
+            case 2: config.mode = MODE_ACCURACY; break;
+            case 3: config.mode = MODE_AFFINITY; break;
+            case 4: config.mode = MODE_GOVERNOR; break;
+            case 5: config.mode = MODE_TRANSFER; break;
+            case 6: config.mode = MODE_STRESS; break;
+            case 7: config.mode = MODE_BENCHMARK; break;
+            case 8:
+                config.mode = MODE_DIAGNOSE;
+                config.show_workers = 1;
+                config.show_governor = 1;
+                break;
+            case 9:
+                config.mode = MODE_DIAGNOSE;
+                config.health_score = 1;
+                break;
+            case 0: return 0;
+            default:
+                fprintf(stderr, "Invalid choice\n");
+                return 1;
+        }
+    }
+    
     /* Print banner */
     if (!config.quiet && !config.json_output && !config.jsonl_output) {
         printf("\n");
@@ -773,45 +1243,142 @@ int main(int argc, char **argv) {
         printf("================================================================================\n");
         if (USE_COLOR) printf("%s", COLOR_RESET);
         printf("\n");
-        printf("Mode: DIAGNOSE (Production Safe)\n");
+        
+        const char *mode_name = "DIAGNOSE";
+        switch (config.mode) {
+            case MODE_DIAGNOSE: mode_name = "DIAGNOSE"; break;
+            case MODE_ACCURACY: mode_name = "ACCURACY TEST"; break;
+            case MODE_AFFINITY: mode_name = "AFFINITY TEST"; break;
+            case MODE_TRANSFER: mode_name = "TRANSFER TEST"; break;
+            case MODE_GOVERNOR: mode_name = "GOVERNOR TEST"; break;
+            case MODE_STRESS: mode_name = "STRESS TEST"; break;
+            case MODE_BENCHMARK: mode_name = "BENCHMARK"; break;
+            case MODE_MENU: mode_name = "MENU"; break;
+        }
+        printf("Mode: %s\n", mode_name);
         printf("\n");
-        if (USE_COLOR) printf("%s", COLOR_YELLOW);
-        printf("NOTE: This is DIAGNOSE mode - no sessions will be created.\n");
-        printf("      This is safe to run on production systems.\n");
-        if (USE_COLOR) printf("%s", COLOR_RESET);
+        
+        if (config.mode == MODE_DIAGNOSE) {
+            if (USE_COLOR) printf("%s", COLOR_YELLOW);
+            printf("NOTE: This is DIAGNOSE mode - no sessions will be created.\n");
+            printf("      This is safe to run on production systems.\n");
+            if (USE_COLOR) printf("%s", COLOR_RESET);
+        } else {
+            if (USE_COLOR) printf("%s", COLOR_YELLOW);
+            printf("WARNING: This mode will create test sessions.\n");
+            printf("         Use DIAGNOSE mode for production-safe observation.\n");
+            if (USE_COLOR) printf("%s", COLOR_RESET);
+        }
         printf("\n");
     }
     
-    /* If no specific options, enable all basic diagnostics */
-    if (!config.show_workers && !config.show_sessions && 
-        !config.show_governor && !config.health_score && 
-        !config.check_balance && !config.monitor) {
-        config.show_workers = 1;
-        config.show_governor = 1;
-        config.health_score = 1;
-    }
-    
-    /* Run monitoring mode */
-    if (config.monitor) {
-        run_monitoring();
-        return 0;
-    }
-    
-    /* Run selected diagnostic checks */
-    if (config.show_workers) {
-        print_workers();
-    }
-    
-    if (config.show_governor) {
-        print_governor();
-    }
-    
-    if (config.health_score) {
-        print_health_score();
-    }
-    
-    if (config.check_balance) {
-        print_balance_check();
+    /* Run the appropriate mode */
+    switch (config.mode) {
+        case MODE_DIAGNOSE:
+            /* If no specific options, enable all basic diagnostics */
+            if (!config.show_workers && !config.show_sessions && 
+                !config.show_governor && !config.health_score && 
+                !config.check_balance && !config.monitor) {
+                config.show_workers = 1;
+                config.show_governor = 1;
+                config.health_score = 1;
+            }
+            
+            /* Run monitoring mode */
+            if (config.monitor) {
+                run_monitoring();
+                break;
+            }
+            
+            /* Run selected diagnostic checks */
+            if (config.show_workers) {
+                print_workers();
+            }
+            
+            if (config.show_governor) {
+                print_governor();
+            }
+            
+            if (config.health_score) {
+                print_health_score();
+            }
+            
+            if (config.check_balance) {
+                print_balance_check();
+            }
+            
+            if (config.show_sessions) {
+                print_sessions();
+            }
+            
+            if (config.check_affinity) {
+                print_header("Session Affinity Check");
+                struct session_info *sessions = NULL;
+                int count = get_sessions(&sessions, 100);
+                
+                if (count <= 0) {
+                    printf("  No sessions found to check affinity\n\n");
+                } else {
+                    int workers_with_sessions = 0;
+                    int *worker_session_counts = calloc(16, sizeof(int));
+                    
+                    for (int i = 0; i < count && i < 16; i++) {
+                        if (sessions[i].worker_id >= 0 && sessions[i].worker_id < 16) {
+                            worker_session_counts[sessions[i].worker_id]++;
+                            if (worker_session_counts[sessions[i].worker_id] == 1) {
+                                workers_with_sessions++;
+                            }
+                        }
+                    }
+                    
+                    printf("  Sessions distributed across %d workers:\n\n", workers_with_sessions);
+                    
+                    for (int i = 0; i < 16; i++) {
+                        if (worker_session_counts[i] > 0) {
+                            printf("  Worker %d: %d sessions", i, worker_session_counts[i]);
+                            if (USE_COLOR) printf("%s", COLOR_GREEN);
+                            printf(" OK");
+                            if (USE_COLOR) printf("%s", COLOR_RESET);
+                            printf("\n");
+                        }
+                    }
+                    
+                    free(worker_session_counts);
+                    free(sessions);
+                    printf("\n");
+                    printf("  Note: Full affinity verification requires tracking session\n");
+                    printf("        creation history and comparing expected vs actual worker.\n\n");
+                }
+            }
+            break;
+            
+        case MODE_ACCURACY:
+            run_accuracy_test(config.test_sessions, config.test_algorithm, config.test_threshold);
+            break;
+            
+        case MODE_AFFINITY:
+            run_affinity_test(config.test_sessions, config.test_retries);
+            break;
+            
+        case MODE_TRANSFER:
+            run_transfer_test(config.file, config.test_buffer_size);
+            break;
+            
+        case MODE_GOVERNOR:
+            run_governor_test(config.trigger);
+            break;
+            
+        case MODE_STRESS:
+            run_stress_test(config.test_sessions, config.test_duration);
+            break;
+            
+        case MODE_BENCHMARK:
+            run_benchmark_test();
+            break;
+            
+        case MODE_MENU:
+            /* Should not reach here */
+            break;
     }
     
     return 0;

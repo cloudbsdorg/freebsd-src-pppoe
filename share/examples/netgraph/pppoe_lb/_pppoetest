@@ -1,0 +1,93 @@
+#!/bin/sh
+# Bash/Zsh completion for pppoetest
+# FreeBSD PPPoE Load Balancer Testing Tool
+
+_pppoetest() {
+    local cur prev opts modes diagnose_opts test_opts output_opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    
+    # Modes
+    modes="diagnose accuracy affinity transfer governor stress benchmark menu"
+    
+    # Diagnose mode options
+    diagnose_opts="-s --show-workers -S --show-sessions -g --show-governor"
+    diagnose_opts="${diagnose_opts} -H --health-score --check-affinity --check-balance"
+    diagnose_opts="${diagnose_opts} --monitor -i --interval --imbalance-threshold"
+    diagnose_opts="${diagnose_opts} --health-threshold"
+    
+    # Test mode options
+    test_opts="-n --sessions -a --algorithm -w --workers -t --threshold"
+    test_opts="${test_opts} -r --retries -f --file -b --buffer-size"
+    test_opts="${test_opts} -d --duration --trigger -v --verbose"
+    
+    # Connection options
+    conn_opts="-h --host -p --port --server --client"
+    
+    # Output options
+    output_opts="-o --output --no-color -q --quiet"
+    
+    # Other options
+    other_opts="--version --help"
+    
+    # Complete modes if first argument
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        COMPREPLY=($(compgen -W "${modes}" -- ${cur}))
+        return 0
+    fi
+    
+    # Check if we're in a specific mode
+    local mode="${COMP_WORDS[1]}"
+    case "${mode}" in
+        diagnose|diag)
+            # Complete diagnose options or standalone options
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "${diagnose_opts} ${output_opts} ${other_opts}" -- ${cur}))
+            fi
+            ;;
+        accuracy|acc)
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "${test_opts} ${output_opts} ${other_opts}" -- ${cur}))
+            fi
+            ;;
+        affinity|aff)
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "${test_opts} ${output_opts} ${other_opts}" -- ${cur}))
+            fi
+            ;;
+        transfer|xfer)
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "${test_opts} ${conn_opts} ${output_opts} ${other_opts}" -- ${cur}))
+            fi
+            ;;
+        governor|gov)
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "${test_opts} --trigger ${output_opts} ${other_opts}" -- ${cur}))
+            elif [[ "${prev}" == "--trigger" ]]; then
+                COMPREPLY=($(compgen -W "scale-up scale-down" -- ${cur}))
+            fi
+            ;;
+        stress|load)
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "${test_opts} ${output_opts} ${other_opts}" -- ${cur}))
+            fi
+            ;;
+        benchmark|perf)
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "${output_opts} ${other_opts}" -- ${cur}))
+            fi
+            ;;
+        *)
+            # Complete any option
+            if [[ "${cur}" == -* ]]; then
+                COMPREPLY=($(compgen -W "${diagnose_opts} ${test_opts} ${conn_opts} ${output_opts} ${other_opts}" -- ${cur}))
+            fi
+            ;;
+    esac
+    
+    return 0
+}
+
+# Register completion
+complete -F _pppoetest pppoetest

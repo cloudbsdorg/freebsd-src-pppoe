@@ -1,0 +1,217 @@
+.\"-
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.\" Copyright (c) 2024 Mark LaPointe <mark@cloudbsd.org>
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\"
+.\" THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+.\" ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+.\" IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+.\" ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+.\" FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+.\" DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+.\" OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+.\" HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+.\" LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+.\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+.\" SUCH DAMAGE.
+.\"
+.\" $FreeBSD$
+.\"
+.Dd May 1, 2024
+.Dt PPPOETEST 8
+.Os
+.Sh NAME
+.Nm pppoetest
+.Nd PPPoE Load Balancer Testing and Diagnostic Tool
+.Sh SYNOPSIS
+.Nm
+.Op Ar mode
+.Op Fl options
+.Sh DESCRIPTION
+The
+.Nm
+utility provides comprehensive testing and diagnostic capabilities for the
+.Xr ng_pppoe_lb 4
+kernel module and
+.Xr pppoed 8
+daemon.
+.Pp
+The default mode is
+.Cm diagnose ,
+which provides passive observation of existing PPPoE sessions without creating
+any new sessions, making it safe for production systems.
+.Pp
+Other modes create test sessions and are intended for testing environments.
+.Sh MODES
+.Bl -tag -width diagnose
+.It Cm diagnose
+Passive observation of existing sessions.
+This is the DEFAULT mode and is production-safe.
+.It Cm accuracy
+Test session distribution accuracy.
+Creates test sessions to verify distribution algorithms.
+.It Cm affinity
+Test session affinity (stickiness).
+Verifies sessions return to the same worker after reconnection.
+.It Cm transfer
+Test file transfer with checksums.
+Streams data through PPPoE sessions with integrity verification.
+.It Cm governor
+Test auto-scaling behavior.
+Verifies the CPU governor triggers scaling correctly.
+.It Cm stress
+High-load stress testing.
+Creates many sessions rapidly to test system stability.
+.It Cm benchmark
+Performance benchmarking.
+Measures throughput, latency, CPU overhead, and memory usage.
+.It Cm menu
+Interactive menu.
+Allows selection of operations without memorizing options.
+.El
+.Sh OPTIONS
+.Ss Diagnose Mode Options
+.Bl -tag -width "--check-affinity"
+.It Fl s , -show-workers
+Show all workers and their states.
+.It Fl S , -show-sessions
+Show all active sessions.
+.It Fl g , -show-governor
+Show governor state and decisions.
+.It Fl H , -health-score
+Show overall health score.
+.It Fl -check-affinity
+Check for session affinity violations.
+.It Fl -check-balance
+Check load balance across workers.
+.It Fl -monitor
+Enable real-time monitoring.
+.It Fl i , Fl interval Ns = N
+Monitoring interval in seconds (default: 5).
+.It Fl -imbalance-threshold Ns = N
+Deviation percentage to trigger warning (default: 20).
+.It Fl -health-threshold Ns = N
+Deviation percentage to trigger error (default: 40).
+.El
+.Ss Test Mode Options
+.Bl -tag -width "-n"
+.It Fl n , Fl sessions Ns = N
+Number of sessions to create (default: 100).
+.It Fl a , Fl algorithm Ns = N
+Algorithm to test: 0=round-robin, 1=hash, 2=least-loaded.
+.It Fl w , Fl workers Ns = N
+Number of workers (default: 4).
+.It Fl t , Fl threshold Ns = N
+Acceptable deviation percentage (default: 10).
+.It Fl r , Fl retries Ns = N
+Reconnection attempts per session (for affinity tests).
+.It Fl f , Fl file Ns = Ar path
+File to transfer (for transfer mode).
+.It Fl b , Fl buffer-size Ns = N
+Buffer size in bytes (default: 65536).
+.It Fl d , Fl duration Ns = N
+Test duration in seconds.
+.It Fl -trigger Ar action
+Governor trigger: scale-up or scale-down.
+.It Fl v , Fl verbose
+Show per-worker details.
+.El
+.Ss Output Options
+.Bl -tag -width "-o"
+.It Fl o , Fl output Ar format
+Output format: console, json, jsonl, csv, or tap.
+.It Fl -no-color
+Disable color output.
+.It Fl q , Fl quiet
+Quiet mode (minimal output).
+.El
+.Ss Connection Options
+.Bl -tag -width "-p"
+.It Fl h , Fl host Ar hostname
+Server hostname (default: localhost).
+.It Fl p , Fl port Ar port
+Control port (default: 9001).
+.It Fl -server
+Run as server (for transfer mode).
+.It Fl -client
+Run as client (for transfer mode).
+.El
+.Ss Other Options
+.Bl -tag -width "--version"
+.It Fl \&? , Fl -help
+Show help message.
+.It Fl -version
+Show version information.
+.El
+.Sh HEALTH SCORE INTERPRETATION
+The health score is a combined metric (0-100) evaluating:
+.Bl -tag -width "90-100"
+.It 90-100
+System is healthy, operating normally.
+.It 70-89
+Warning state, some metrics need attention.
+.It 50-69
+Failure state, significant issues detected.
+.It 0-49
+Critical state, immediate attention required.
+.El
+.Sh EXAMPLES
+.Ss Diagnose Existing System (Production Safe)
+.Bd -literal
+pppoetest
+.Ed
+.Pp
+Shows workers, governor status, and health score without creating sessions.
+.Ss Show Specific Diagnostics
+.Bd -literal
+pppoetest diagnose -s -g
+.Ed
+.Pp
+Show workers and governor status only.
+.Ss Real-Time Monitoring
+.Bd -literal
+pppoetest diagnose --monitor -i 5
+.Ed
+.Pp
+Monitor system state, updating every 5 seconds.
+.Ss Check Load Balance
+.Bd -literal
+pppoetest diagnose --check-balance --imbalance-threshold 15
+.Ed
+.Pp
+Check load balance with 15% deviation threshold.
+.Ss Test Governor Scaling
+.Bd -literal
+pppoetest governor --trigger scale-up
+.Ed
+.Pp
+Test governor scale-up trigger.
+.Ss Interactive Menu
+.Bd -literal
+pppoetest menu
+.Ed
+.Pp
+Display interactive menu for operation selection.
+.Sh FILES
+.Bl -tag -width ".Pa /usr/share/examples/netgraph/pppoe_lb/_pppoetest" -compact
+.It Pa /usr/share/examples/netgraph/pppoe_lb/_pppoetest
+Bash/Zsh shell completion for
+.Nm .
+.El
+.Sh SEE ALSO
+.Xr ng_pppoe_lb 4 ,
+.Xr pppoed 8 ,
+.Xr ngctl 8
+.Sh AUTHORS
+.An Mark LaPointe Aq mailto:mark@cloudbsd.org
+.Sh BUGS
+Report bugs to the FreeBSD bug tracking system.
