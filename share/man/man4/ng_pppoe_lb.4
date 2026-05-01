@@ -22,7 +22,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd April 23, 2026
+.Dd May 1, 2026
 .Dt NG_PPPOE_LB 4
 .Os
 .Sh NAME
@@ -160,10 +160,106 @@ Current number of active worker nodes.
 Current number of active PPPoE sessions.
 .It Va net.graph.pppoe_lb.algorithm
 Current load balancing algorithm (0=round-robin, 1=hash, 2=least-loaded).
-.It Va net.graph.pppoe_lb.max_workers
-Governor maximum workers (0=auto-detect to CPU cores, >0=explicit hard cap).
 .It Va net.graph.pppoe_lb.debug
 Enable debug logging (0=disabled, 1=enabled).
+.Ss Governor Configuration
+.It Va net.graph.pppoe_lb.governor.enabled
+Enable the CPU governor (0=disabled, 1=enabled).
+Default is 0 (disabled).
+.It Va net.graph.pppoe_lb.governor.mode
+Governor operating mode (0=manual, 1=auto).
+In auto mode, the governor automatically scales workers based on CPU/session thresholds.
+Default is 0 (manual).
+.It Va net.graph.pppoe_lb.governor.min_workers
+Minimum number of workers the governor will maintain.
+The governor will never scale down below this value.
+Default is 1.
+.It Va net.graph.pppoe_lb.governor.max_workers
+Maximum number of workers allowed.
+When set to 0, the governor auto-detects to the number of CPU cores
+.Pq Va mp_ncpus .
+Default is 0 (auto).
+.It Va net.graph.pppoe_lb.governor.poll_interval
+Governor poll interval in seconds.
+The governor checks metrics at this interval.
+Valid range: 1-60 seconds.
+Default is 5 seconds.
+.It Va net.graph.pppoe_lb.governor.cpu_threshold
+CPU utilization threshold for scaling up (percentage).
+When system CPU exceeds this value, the governor may add workers.
+Valid range: 1-100.
+Default is 80.
+.It Va net.graph.pppoe_lb.governor.cpu_low_threshold
+CPU utilization low threshold for scaling down (percentage).
+When system CPU falls below this value, the governor may remove workers.
+Valid range: 1-100.
+Default is 30.
+.It Va net.graph.pppoe_lb.governor.sessions_per_worker
+Target number of sessions per worker for scaling decisions.
+Used in combination with cpu_threshold for more accurate scaling.
+Default is 500.
+.It Va net.graph.pppoe_lb.governor.drain_timeout
+Seconds to wait for a worker to drain before removing it.
+The worker remains in DRAINING state for this duration.
+Default is 30 seconds.
+.Ss Governor Status (Read-Only)
+.It Va net.graph.pppoe_lb.governor.current_workers
+Current total number of worker nodes (active + draining + pending removal).
+.It Va net.graph.pppoe_lb.governor.active_workers
+Number of workers in ACTIVE state (accepting new sessions).
+.It Va net.graph.pppoe_lb.governor.draining_workers
+Number of workers in DRAINING state (completing existing sessions).
+.It Va net.graph.pppoe_lb.governor.pending_removals
+Number of workers pending actual removal.
+.It Va net.graph.pppoe_lb.governor.total_sessions
+Total number of active sessions across all workers.
+.It Va net.graph.pppoe_lb.governor.cpu_usage
+Current CPU utilization percentage.
+.It Va net.graph.pppoe_lb.governor.cpu_avg
+Average CPU utilization percentage over the poll interval.
+.It Va net.graph.pppoe_lb.governor.last_decision
+Last scaling decision made by the governor:
+.Bl -tag -width 3n
+.It Cm 0
+No action
+.It Cm 1
+Scale up (add worker)
+.It Cm 2
+Scale down (remove worker)
+.It Cm 3
+Cancel drain (change mind)
+.El
+.It Va net.graph.pppoe_lb.governor.last_reason
+Reason for the last governor decision:
+.Bl -tag -width 3n
+.It Cm 0
+No reason (idle)
+.It Cm 1
+CPU high (exceeded cpu_threshold)
+.It Cm 2
+CPU low (below cpu_low_threshold)
+.It Cm 3
+Sessions high (exceeded sessions_per_worker threshold)
+.It Cm 4
+Sessions low (below sessions_per_worker threshold)
+.El
+.Ss Per-Worker Status
+.It Va net.graph.pppoe_lb.workers.N.state
+State of worker N.
+.Bl -tag -width 3n
+.It Cm 0
+ACTIVE - Accepting new sessions
+.It Cm 1
+DRAINING - Not accepting new sessions, waiting for existing sessions to complete
+.It Cm 2
+PENDING_REMOVAL - Empty, waiting for removal
+.El
+.It Va net.graph.pppoe_lb.workers.N.sessions
+Number of active sessions on worker N.
+.It Va net.graph.pppoe_lb.workers.N.last_activity
+Timestamp of last activity on worker N.
+.It Va net.graph.pppoe_lb.workers.N.uptime
+Uptime of worker N in seconds since creation.
 .El
 .Sh EXAMPLES
 Load the kernel module:
