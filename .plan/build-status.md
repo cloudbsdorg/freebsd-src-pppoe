@@ -132,7 +132,12 @@
 - `tests/netgraph/ng_pppoe_lb_vm_test.sh` (NEW)
 
 ### Documentation (.plan/)
-- `.plan/multithreaded-pppoe-plan.md` (MODIFIED - updated TODO tracker)
+- `.plan/0.0-PPPoE-TOC.md` (TOC - links to all plan documents)
+- `.plan/1.0-PPPoE-Overview.md` (High-level architecture overview)
+- `.plan/3.0-PPPoE-Implementation-Tasks.md` (Implementation task tracker)
+- `.plan/5.0-PPPoE-Governance-AutoScaling.md` (Auto-scaling design)
+- `.plan/5.1-PPPoE-Sysctl-Interface.md` (Sysctl reference)
+- `.plan/10.0-PPPoE-Testing-Framework.md` (pppoe_lb_test C++ tool specification)
 - `.plan/build-status.md` (NEW - this file)
 
 ---
