@@ -1,6 +1,6 @@
 # Multithreaded PPPoE Build Status
 
-**Date:** 2026-04-23 12:14  
+**Date:** 2026-05-01
 **Branch:** feature/multithreaded-pppoe (to be created)  
 **Target:** FreeBSD 16  
 **Author:** Mark LaPointe <mark@cloudbsd.org>  
@@ -137,7 +137,7 @@
 - `.plan/3.0-PPPoE-Implementation-Tasks.md` (Implementation task tracker)
 - `.plan/5.0-PPPoE-Governance-AutoScaling.md` (Auto-scaling design)
 - `.plan/5.1-PPPoE-Sysctl-Interface.md` (Sysctl reference)
-- `.plan/10.0-PPPoE-Testing-Framework.md` (pppoe_lb_test C++ tool specification)
+- `.plan/10.0-PPPoE-Testing-Framework.md` (pppoetest C++ tool specification)
 - `.plan/build-status.md` (NEW - this file)
 
 ---
@@ -321,4 +321,4 @@ pppoed -L -w 8 -G 8 -A 1
 
 ---
 
-*Last updated: 2026-04-23 12:14*
+*Last updated: 2026-05-01*
