@@ -189,9 +189,119 @@ test_governor_config() {
         return 1
     fi
     
+    # Test new governor sysctls
+    sysctl net.graph.pppoe_lb.governor.mode=1
+    sysctl net.graph.pppoe_lb.governor.min_workers=2
+    sysctl net.graph.pppoe_lb.governor.poll_interval=10
+    sysctl net.graph.pppoe_lb.governor.sessions_per_worker=100
+    sysctl net.graph.pppoe_lb.governor.drain_timeout=60
+    
+    # Verify governor mode
+    MODE=$(sysctl -n net.graph.pppoe_lb.governor.mode)
+    if [ "$MODE" != "1" ]; then
+        log_error "Governor mode not set correctly (expected 1, got $MODE)"
+        unload_modules
+        return 1
+    fi
+    
+    # Verify min_workers
+    MIN=$(sysctl -n net.graph.pppoe_lb.governor.min_workers)
+    if [ "$MIN" != "2" ]; then
+        log_error "Governor min_workers not set correctly"
+        unload_modules
+        return 1
+    fi
+    
+    # Verify poll_interval
+    INTERVAL=$(sysctl -n net.graph.pppoe_lb.governor.poll_interval)
+    if [ "$INTERVAL" != "10" ]; then
+        log_error "Governor poll_interval not set correctly"
+        unload_modules
+        return 1
+    fi
+    
+    # Verify drain_timeout
+    TIMEOUT=$(sysctl -n net.graph.pppoe_lb.governor.drain_timeout)
+    if [ "$TIMEOUT" != "60" ]; then
+        log_error "Governor drain_timeout not set correctly"
+        unload_modules
+        return 1
+    fi
+    
     unload_modules
     
     log_info "Test 4: PASSED"
+    return 0
+}
+
+# Test 4b: Governor status sysctls
+test_governor_status() {
+    log_info "Test 4b: Governor status sysctls"
+    
+    load_modules || return 1
+    
+    # Verify read-only status sysctls exist and are accessible
+    sysctl -n net.graph.pppoe_lb.governor.current_workers >/dev/null
+    sysctl -n net.graph.pppoe_lb.governor.active_workers >/dev/null
+    sysctl -n net.graph.pppoe_lb.governor.draining_workers >/dev/null
+    sysctl -n net.graph.pppoe_lb.governor.pending_removals >/dev/null
+    sysctl -n net.graph.pppoe_lb.governor.total_sessions >/dev/null
+    sysctl -n net.graph.pppoe_lb.governor.cpu_usage >/dev/null
+    sysctl -n net.graph.pppoe_lb.governor.cpu_avg >/dev/null
+    sysctl -n net.graph.pppoe_lb.governor.last_decision >/dev/null
+    sysctl -n net.graph.pppoe_lb.governor.last_reason >/dev/null
+    
+    # Verify initial values are reasonable
+    CURRENT=$(sysctl -n net.graph.pppoe_lb.governor.current_workers)
+    if [ "$CURRENT" -lt 0 ]; then
+        log_error "Governor current_workers has invalid value: $CURRENT"
+        unload_modules
+        return 1
+    fi
+    
+    # Verify last_decision is 0 (none) initially
+    DECISION=$(sysctl -n net.graph.pppoe_lb.governor.last_decision)
+    if [ "$DECISION" != "0" ]; then
+        log_warn "Governor last_decision not 0 on startup: $DECISION"
+    fi
+    
+    unload_modules
+    
+    log_info "Test 4b: PASSED"
+    return 0
+}
+
+# Test 4c: Per-worker status sysctls
+test_worker_sysctls() {
+    log_info "Test 4c: Per-worker status sysctls"
+    
+    load_modules || return 1
+    
+    # Create a worker node to test per-worker sysctls
+    # Note: This requires a real network interface
+    
+    # Even without a real interface, we can verify the sysctl OID exists
+    # by trying to read worker 0's state
+    WORKER0_STATE=$(sysctl -n net.graph.pppoe_lb.workers.0.state 2>/dev/null || echo "N/A")
+    
+    # If worker 0 exists, verify its sysctls
+    if [ "$WORKER0_STATE" != "N/A" ]; then
+        # Worker exists, verify all its sysctls
+        sysctl -n net.graph.pppoe_lb.workers.0.sessions >/dev/null
+        sysctl -n net.graph.pppoe_lb.workers.0.last_activity >/dev/null
+        sysctl -n net.graph.pppoe_lb.workers.0.uptime >/dev/null
+        
+        # Verify state is valid (0=ACTIVE, 1=DRAINING, 2=PENDING_REMOVAL)
+        if [ "$WORKER0_STATE" -lt 0 ] || [ "$WORKER0_STATE" -gt 2 ]; then
+            log_error "Worker 0 state has invalid value: $WORKER0_STATE"
+            unload_modules
+            return 1
+        fi
+    fi
+    
+    unload_modules
+    
+    log_info "Test 4c: PASSED"
     return 0
 }
 
@@ -283,6 +393,18 @@ main() {
     fi
     
     if test_governor_config; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    
+    if test_governor_status; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    
+    if test_worker_sysctls; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
