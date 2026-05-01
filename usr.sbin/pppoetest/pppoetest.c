@@ -1307,6 +1307,17 @@ static void print_menu(void) {
     printf("================================================================================\n");
     if (USE_COLOR) printf("%s", COLOR_RESET);
     printf("\n");
+    
+    /* Show current defaults */
+    if (USE_COLOR) printf("%s", COLOR_CYAN);
+    printf("Current Defaults:\n");
+    printf("  - Mode: diagnose (production-safe, no session creation)\n");
+    printf("  - Imbalance threshold: %d%%\n", config.imbalance_threshold);
+    printf("  - Health threshold: %d%%\n", config.health_threshold);
+    printf("  - Monitoring interval: %ds\n", config.interval);
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    printf("\n");
+    
     printf("Select an operation:\n");
     printf("\n");
     printf("  [1] Diagnose System          - Analyze existing configuration (PRODUCTION SAFE)\n");
@@ -1316,7 +1327,7 @@ static void print_menu(void) {
     printf("  [5] Test File Transfer       - Stream files with checksums\n");
     printf("  [6] Stress Test              - High-load stress testing\n");
     printf("  [7] Benchmark                - Performance benchmarking\n");
-    printf("  [8] Show Configuration       - Display current configuration\n");
+    printf("  [8] Configure Defaults       - Set default thresholds and options\n");
     printf("  [9] Health Check             - Quick health assessment\n");
     printf("  [0] Exit\n");
     printf("\n");
@@ -1327,6 +1338,105 @@ static void print_menu(void) {
     printf("         Mode [1] is production safe - no session creation.\n");
     if (USE_COLOR) printf("%s", COLOR_RESET);
     printf("\n");
+    
+    /* Ask about proceeding with defaults */
+    printf("Should I proceed with these diagnostic feature defaults?\n");
+    printf("  - diagnose mode as default (safe)\n");
+    printf("  - %d%% imbalance threshold\n", config.imbalance_threshold);
+    printf("  - %d-second monitoring interval\n", config.interval);
+    printf("\n");
+    printf("Proceed? [Y/n] ");
+}
+
+static void print_configure_menu(void) {
+    printf("\n");
+    if (USE_COLOR) printf("%s", COLOR_BOLD);
+    printf("================================================================================\n");
+    printf("                         Configure Defaults\n");
+    printf("================================================================================\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    printf("\n");
+    printf("  [1] Set imbalance threshold    (current: %d%%)\n", config.imbalance_threshold);
+    printf("  [2] Set health threshold      (current: %d%%)\n", config.health_threshold);
+    printf("  [3] Set monitoring interval   (current: %ds)\n", config.interval);
+    printf("  [4] Reset all to defaults\n");
+    printf("  [0] Back to main menu\n");
+    printf("\n");
+}
+
+static void run_configure_menu(void) {
+    int running = 1;
+    while (running) {
+        print_configure_menu();
+        
+        printf("Choice: ");
+        char line[256];
+        if (!(fgets(line, sizeof(line), stdin))) {
+            break;
+        }
+        
+        int choice = atoi(line);
+        char *endptr;
+        
+        switch (choice) {
+            case 1:
+                printf("Enter new imbalance threshold (1-100%%): ");
+                if (fgets(line, sizeof(line), stdin)) {
+                    int val = strtol(line, &endptr, 10);
+                    if (endptr != line && val >= 1 && val <= 100) {
+                        config.imbalance_threshold = val;
+                        printf("Imbalance threshold set to %d%%\n", val);
+                    } else {
+                        printf("Invalid value. Must be between 1 and 100.\n");
+                    }
+                }
+                break;
+            case 2:
+                printf("Enter new health threshold (1-100%%): ");
+                if (fgets(line, sizeof(line), stdin)) {
+                    int val = strtol(line, &endptr, 10);
+                    if (endptr != line && val >= 1 && val <= 100) {
+                        config.health_threshold = val;
+                        printf("Health threshold set to %d%%\n", val);
+                    } else {
+                        printf("Invalid value. Must be between 1 and 100.\n");
+                    }
+                }
+                break;
+            case 3:
+                printf("Enter monitoring interval (1-60 seconds): ");
+                if (fgets(line, sizeof(line), stdin)) {
+                    int val = strtol(line, &endptr, 10);
+                    if (endptr != line && val >= 1 && val <= 60) {
+                        config.interval = val;
+                        printf("Monitoring interval set to %ds\n", val);
+                    } else {
+                        printf("Invalid value. Must be between 1 and 60.\n");
+                    }
+                }
+                break;
+            case 4:
+                config.imbalance_threshold = 20;
+                config.health_threshold = 40;
+                config.interval = 5;
+                printf("All settings reset to defaults:\n");
+                printf("  - Imbalance threshold: %d%%\n", config.imbalance_threshold);
+                printf("  - Health threshold: %d%%\n", config.health_threshold);
+                printf("  - Monitoring interval: %ds\n", config.interval);
+                break;
+            case 0:
+                running = 0;
+                break;
+            default:
+                printf("Invalid choice\n");
+                break;
+        }
+        
+        if (running && choice != 0) {
+            printf("\nPress Enter to continue...");
+            fgets(line, sizeof(line), stdin);
+        }
+    }
 }
 
 /* Usage */
@@ -1544,32 +1654,50 @@ int main(int argc, char **argv) {
     /* Handle menu mode */
     if (config.mode == MODE_MENU) {
         print_menu();
-        int choice;
-        if (!(scanf("%d", &choice))) {
+        
+        /* Read the entire line */
+        char line[256];
+        if (!(fgets(line, sizeof(line), stdin))) {
             return 0;
         }
         
-        switch (choice) {
-            case 1: config.mode = MODE_DIAGNOSE; break;
-            case 2: config.mode = MODE_ACCURACY; break;
-            case 3: config.mode = MODE_AFFINITY; break;
-            case 4: config.mode = MODE_GOVERNOR; break;
-            case 5: config.mode = MODE_TRANSFER; break;
-            case 6: config.mode = MODE_STRESS; break;
-            case 7: config.mode = MODE_BENCHMARK; break;
-            case 8:
-                config.mode = MODE_DIAGNOSE;
-                config.show_workers = 1;
-                config.show_governor = 1;
-                break;
-            case 9:
-                config.mode = MODE_DIAGNOSE;
-                config.health_score = 1;
-                break;
-            case 0: return 0;
-            default:
-                fprintf(stderr, "Invalid choice\n");
-                return 1;
+        /* Check for Y/y or empty (proceed with defaults) */
+        int choice = -1;
+        char *ptr = line;
+        while (*ptr == ' ') ptr++;  /* Skip leading spaces */
+        if (*ptr == 'y' || *ptr == 'Y' || *ptr == '\n' || *ptr == '\0') {
+            /* Default: run diagnose mode with all checks */
+            config.mode = MODE_DIAGNOSE;
+            config.show_workers = 1;
+            config.show_governor = 1;
+            config.health_score = 1;
+            config.check_balance = 1;
+        } else if (*ptr >= '0' && *ptr <= '9') {
+            choice = atoi(ptr);
+            
+            switch (choice) {
+                case 1: config.mode = MODE_DIAGNOSE; break;
+                case 2: config.mode = MODE_ACCURACY; break;
+                case 3: config.mode = MODE_AFFINITY; break;
+                case 4: config.mode = MODE_GOVERNOR; break;
+                case 5: config.mode = MODE_TRANSFER; break;
+                case 6: config.mode = MODE_STRESS; break;
+                case 7: config.mode = MODE_BENCHMARK; break;
+                case 8:  /* Configure - show configure menu */
+                    run_configure_menu();
+                    return 0;
+                case 9:
+                    config.mode = MODE_DIAGNOSE;
+                    config.health_score = 1;
+                    break;
+                case 0: return 0;
+                default:
+                    fprintf(stderr, "Invalid choice\n");
+                    return 1;
+            }
+        } else {
+            fprintf(stderr, "Invalid input\n");
+            return 1;
         }
     }
     
