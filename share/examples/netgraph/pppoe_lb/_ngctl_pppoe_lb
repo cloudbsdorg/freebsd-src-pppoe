@@ -1,0 +1,80 @@
+#compdef ngctl
+
+# Zsh completion for ngctl pppoe_lb subcommands
+# Install: Copy to /usr/local/share/zsh/site-functions/ or ~/.zshrc:
+#   fpath=(/path/to/this/file $fpath)
+#   autoload -Uz _ngctl_pppoe_lb
+
+_ngctl_pppoe_lb() {
+    local -a commands
+    commands=(
+        'show:Show PPPoE load balancer information'
+        'info:Alias for show'
+        'config:Configure PPPoE load balancer'
+        'set:Alias for config'
+        'stats:Show PPPoE load balancer statistics'
+        'statistics:Alias for stats'
+        'map:Show PPPoE session-to-worker mapping'
+        'sessions:Alias for map'
+    )
+
+    local -a algorithm_opts
+    algorithm_opts=(
+        '0:round-robin'
+        '1:hash-based'
+        '2:least-loaded'
+    )
+
+    local -a config_params
+    config_params=(
+        'algorithm:Load balancing algorithm'
+        'max_workers:Maximum workers for governor'
+        'debug:Debug level'
+    )
+
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    _arguments -C \
+        '-h[Show help]' \
+        '*::subcommand:->subcommand' \
+        '*::arg:->arg'
+
+    case $state in
+        subcommand)
+            _describe 'command' commands
+            ;;
+        arg)
+            case ${words[1]} in
+                show|info)
+                    _path_files -W /tmp -P / -f
+                    ;;
+                config|set)
+                    case ${words[2]} in
+                        algorithm)
+                            _describe 'algorithm' algorithm_opts
+                            ;;
+                        max_workers|debug)
+                            _numbers 0 1 2 4 8 10 16 32
+                            ;;
+                        *)
+                            if [[ ${#words[@]} -eq 2 ]]; then
+                                _path_files -W /tmp -P / -f
+                            else
+                                _describe 'parameter' config_params
+                            fi
+                            ;;
+                    esac
+                    ;;
+                stats|statistics)
+                    _path_files -W /tmp -P / -f
+                    ;;
+                map|sessions)
+                    _path_files -W /tmp -P / -f
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_ngctl_pppoe_lb "$@"

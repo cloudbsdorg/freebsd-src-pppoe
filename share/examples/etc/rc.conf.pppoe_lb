@@ -1,0 +1,68 @@
+# PPPoE Load Balancer - /etc/rc.conf Examples
+#
+# Add these lines to /etc/rc.conf to enable multithreaded PPPoE.
+# See pppoed(8) and ng_pppoe_lb(4) for details.
+#
+
+# =========================================================================
+# Option 1: Basic 2-worker load balancer
+# =========================================================================
+# pppoed_enable="YES"
+# pppoed_interface="em0"
+# pppoed_loadbalancer="YES"
+# pppoed_workers="2"
+
+# =========================================================================
+# Option 2: 4-worker load balancer (recommended for quad-core)
+# =========================================================================
+# pppoed_enable="YES"
+# pppoed_interface="em0"
+# pppoed_loadbalancer="YES"
+# pppoed_workers="4"
+
+# =========================================================================
+# Option 3: Auto-scaling with CPU governor (up to 8 workers)
+# =========================================================================
+# pppoed_enable="YES"
+# pppoed_interface="em0"
+# pppoed_loadbalancer="YES"
+# pppoed_workers="2"
+# pppoed_governor_max="8"
+
+# =========================================================================
+# Option 4: Hash-based session affinity (persistent sessions)
+# =========================================================================
+# pppoed_enable="YES"
+# pppoed_interface="em0"
+# pppoed_loadbalancer="YES"
+# pppoed_workers="4"
+# pppoed_algorithm="1"    # 0=round-robin, 1=hash, 2=least-loaded
+
+# =========================================================================
+# Optional: Specify provider name
+# =========================================================================
+# pppoed_provider="ISP_NAME"
+
+# =========================================================================
+# Optional: Specify access concentrator name
+# =========================================================================
+# pppoed_acname="MyAccessConcentrator"
+
+# =========================================================================
+# Tunable sysctl variables (set in /etc/sysctl.conf)
+# =========================================================================
+# Governor settings
+# net.graph.pppoe_lb.governor.enabled=1
+# net.graph.pppoe_lb.governor.max_workers=8
+# net.graph.pppoe_lb.governor.cpu_threshold=80
+# net.graph.pppoe_lb.governor.cpu_low_threshold=20
+# net.graph.pppoe_lb.governor.scale_up_interval=5
+# net.graph.pppoe_lb.governor.scale_down_interval=60
+
+# =========================================================================
+# Kernel modules (add to /boot/loader.conf)
+# =========================================================================
+# netgraph_load="YES"
+# ng_ether_load="YES"
+# ng_pppoe_load="YES"
+# ng_pppoe_lb_load="YES"

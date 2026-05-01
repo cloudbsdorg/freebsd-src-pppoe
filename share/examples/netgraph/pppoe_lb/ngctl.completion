@@ -1,0 +1,53 @@
+# Tcsh completion for ngctl with pppoe_lb support
+# Install: Add to ~/.cshrc or /etc/csh.cshrc:
+#   source /path/to/ngctl.completion
+#
+# For system-wide installation on FreeBSD:
+#   cp ngctl.completion /usr/local/share/tcsh/completion/
+
+# ngctl completion with pppoe_lb subcommands
+complete ngctl 'p/1/-f -d -t -h -N -v/' \
+    'c/-f/`_complete_files`/' \
+    'c/-d/`_complete_debug_levels`/' \
+    'n/-d/[0-9]/' \
+    'c/-t/`_complete_timeout`/' \
+    'n/-t/[0-9]/' \
+    'c/*/`_complete_ngctl`/'
+
+# ngctl subcommands
+set _ngctl_cmds = "show list mkpeer connect name msg read rmhook link unlink hook shutdown dot dump quit status byname export msgtypes mkpeer connect"
+
+# pppoe_lb subcommands
+set _pppoe_lb_cmds = "show config stats map info set statistics sessions"
+
+# Algorithm values
+set _pppoe_lb_algo = "0 1 2"
+
+# Config parameters
+set _pppoe_lb_config = "algorithm max_workers debug"
+
+# ngctl completion helper
+alias _complete_ngctl 'set cmd = "$<PREFIX>"; if ("$cmd" == "pppoe_lb") then; echo "$_pppoe_lb_cmds"; else; echo "$_ngctl_cmds"; endif'
+
+# Complete files
+alias _complete_files 'ls -1'
+
+# Debug levels
+alias _complete_debug_levels 'echo "1 2 3 4 5 6 7"'
+
+# Timeout values
+alias _complete_timeout 'echo "5 10 30 60"'
+
+# Complete pppoe_lb subcommands
+complete ngctl 'p/2/`if ("$搭{words[1]}" == "pppoe_lb") echo "$_pppoe_lb_cmds"`/' \
+    'n/pppoe_lb show/`_complete_netgraph_paths`/' \
+    'n/pppoe_lb info/`_complete_netgraph_paths`/' \
+    'n/pppoe_lb stats/`_complete_netgraph_paths`/' \
+    'n/pppoe_lb statistics/`_complete_netgraph_paths`/' \
+    'n/pppoe_lb map/`_complete_netgraph_paths`/' \
+    'n/pppoe_lb sessions/`_complete_netgraph_paths`/' \
+    'n/pppoe_lb config/`_complete_netgraph_paths`/' \
+    'n/pppoe_lb set/`_complete_netgraph_paths`/'
+
+# Complete netgraph node paths
+alias _complete_netgraph_paths 'ngctl list 2>/dev/null | awk "{print \$1}" | grep "^/.*:"'

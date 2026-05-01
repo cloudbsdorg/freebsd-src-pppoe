@@ -1,0 +1,38 @@
+#!/bin/sh
+#
+# PPPoE Load Balancer - Basic 2 Worker Setup
+#
+# This example creates a load balancer with 2 worker nodes.
+# Suitable for dual-core systems or basic testing.
+#
+# Usage: ngctl -f basic_2workers
+#
+# Modify ETHER_IFACE to match your Ethernet interface.
+
+ETHER_IFACE="em0"
+LB_NODE="pppoe_lb0"
+
+# Create PPPoE load balancer node
+mkpeer $ETHER_IFACE: pppoe_lb lower link0
+name $ETHER_IFACE:lower $LB_NODE
+
+# Create first worker node
+mkpeer $LB_NODE: pppoe worker0
+mkpeer worker0: eiface link0 pppoe
+
+# Create second worker node
+mkpeer $LB_NODE: pppoe worker1
+mkpeer worker1: eiface link1 pppoe
+
+# Configure load balancer (algorithm 0 = round-robin)
+msg $LB_NODE: setconfig { algorithm=0 debug=0 }
+
+# Display status
+show $LB_NODE:
+list
+
+# Notes:
+# - Sessions will be distributed round-robin to worker0 and worker1
+# - Each worker creates a tun interface (tun0, tun1, etc.)
+# - Use 'ngctl msg pppoe_lb0: getstats' to view statistics
+# - Use 'ngctl msg pppoe_lb0: getmap' to view session mapping

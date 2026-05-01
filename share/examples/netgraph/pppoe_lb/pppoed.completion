@@ -1,0 +1,49 @@
+# Tcsh completion for pppoed
+# Install: Add to ~/.cshrc or /etc/csh.cshrc:
+#   source /path/to/pppoed.completion
+#
+# For system-wide installation on FreeBSD:
+#   cp pppoed.completion /usr/local/share/tcsh/completion/
+
+# pppoed completion
+complete pppoed 'p/1/-F -d -P -a -e -l -n -p -L -w -A -G/' \
+    'c/-F//' \
+    'c/-d//' \
+    'c/-P/`_complete_pidfile`/' \
+    'c/-a/`_complete_providers`/' \
+    'c/-e/`_complete_executables`/' \
+    'c/-l/`_complete_labels`/' \
+    'c/-n/[0-9]/' \
+    'c/-p/`_complete_providers`/' \
+    'c/-L//' \
+    'c/-w/`_complete_worker_counts`/' \
+    'c/-A/`_complete_algorithms`/' \
+    'c/-G/[0-9]/' \
+    'n/-A/`_complete_algorithms`/' \
+    'n/-w/`_complete_worker_counts`/' \
+    'c/*/`_complete_interfaces`/'
+
+# Helper functions for tcsh completion
+
+# Get available providers from /etc/ppp/ppp.conf
+alias _complete_providers 'grep -E "^[a-zA-Z0-9_]+:" /etc/ppp/ppp.conf 2>/dev/null | cut -d: -f1'
+
+# Get network interfaces
+alias _complete_interfaces 'ifconfig -l 2>/dev/null'
+
+# Algorithm completion
+set _pppoed_algorithms = "0 1 2"
+alias _complete_algorithms 'echo $_pppoed_algorithms'
+
+# Worker count completion
+set _pppoed_workers = "1 2 4 8 16"
+alias _complete_worker_counts 'echo $_pppoed_workers'
+
+# PID file completion
+alias _complete_pidfile 'ls -1 /var/run/*.pid 2>/dev/null | sed "s|/var/run/||" | sed "s/.pid//"'
+
+# Label completion (from ppp.conf)
+alias _complete_labels 'grep -E "^[a-zA-Z0-9_]+:" /etc/ppp/ppp.conf 2>/dev/null | cut -d: -f1'
+
+# Executable completion
+alias _complete_executables 'ls -1 /usr/local/sbin /usr/local/bin 2>/dev/null | grep -v "^$"'

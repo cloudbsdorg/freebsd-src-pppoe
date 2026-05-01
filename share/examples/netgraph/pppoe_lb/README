@@ -1,0 +1,57 @@
+# PPPoE Load Balancer Examples
+#
+# This directory contains example configurations for the ng_pppoe_lb
+# (PPPoE Load Balancer) netgraph node.
+#
+# For detailed documentation, see ng_pppoe_lb(4).
+
+# Prerequisites
+# -------------
+# Before using these examples, ensure the required kernel modules are loaded:
+#
+#   kldload netgraph
+#   kldload ng_ether
+#   kldload ng_pppoe
+#   kldload ng_pppoe_lb
+#
+# Or add to /boot/loader.conf:
+#   netgraph_load="YES"
+#   ng_ether_load="YES"
+#   ng_pppoe_load="YES"
+#   ng_pppoe_lb_load="YES"
+
+# Files in this directory
+# -----------------------
+# basic_2workers		- Basic setup with 2 worker nodes
+# basic_4workers		- Setup with 4 worker nodes (multi-core)
+# governor_auto		- CPU governor enabled for auto-scaling
+# monitor_example	- Example monitoring commands
+# pppoe_lb_test.sh	- Comprehensive test script with auto-scaling
+#
+# Shell Completions
+# -----------------
+# Bash completions (for bash-completion port):
+#   cp _ngctl_pppoe_lb /usr/local/etc/bash_completion.d/
+#   cp _pppoed /usr/local/etc/bash_completion.d/
+#   source /usr/local/etc/bash_completion.d/_ngctl_pppoe_lb
+#   source /usr/local/etc/bash_completion.d/_pppoed
+#
+# Zsh completions (for zsh port):
+#   cp _ngctl_pppoe_lb /usr/local/share/zsh/site-functions/_ngctl
+#   cp _pppoed /usr/local/share/zsh/site-functions/_pppoed
+#   # Add to ~/.zshrc:
+#   fpath=(/usr/local/share/zsh/site-functions $fpath)
+#   autoload -Uz _ngctl _pppoed
+#
+# Tcsh completions (FreeBSD default shell):
+#   cp ngctl.completion ~/.cshrc
+#   cp pppoed.completion ~/.cshrc
+#   source ~/.cshrc
+
+# Testing
+# -------
+# To test these configurations:
+# 1. Load required kernel modules
+# 2. Choose a configuration below
+# 3. Review and modify interface names as needed
+# 4. Run ngctl -f <config-file>

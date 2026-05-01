@@ -1,0 +1,51 @@
+#!/bin/sh
+#
+# PPPoE Load Balancer - CPU Governor Auto-Scaling
+#
+# This example enables the CPU governor for automatic worker scaling.
+# Workers are added when CPU > 80% and removed when CPU < 20%.
+#
+# Usage: ngctl -f governor_auto
+#
+# Note: The governor is controlled via sysctl variables.
+# View current settings with: sysctl net.graph.pppoe_lb.governor
+
+ETHER_IFACE="em0"
+LB_NODE="pppoe_lb0"
+INITIAL_WORKERS=2
+MAX_WORKERS=4
+
+# Create PPPoE load balancer node
+mkpeer $ETHER_IFACE: pppoe_lb lower link0
+name $ETHER_IFACE:lower $LB_NODE
+
+# Create initial workers
+i=0
+while [ $i -lt $INITIAL_WORKERS ]; do
+    mkpeer $LB_NODE: pppoe worker$i
+    mkpeer worker$i: eiface link$i pppoe
+    i=$((i + 1))
+done
+
+# Configure governor settings via sysctl
+# These can be tuned before starting the daemon
+sysctl net.graph.pppoe_lb.governor.enabled=1
+sysctl net.graph.pppoe_lb.governor.max_workers=$MAX_WORKERS
+sysctl net.graph.pppoe_lb.governor.cpu_threshold=80
+sysctl net.graph.pppoe_lb.governor.cpu_low_threshold=20
+sysctl net.graph.pppoe_lb.governor.scale_up_interval=5
+sysctl net.graph.pppoe_lb.governor.scale_down_interval=60
+
+# Configure load balancer with governor-enabled algorithm
+msg $LB_NODE: setconfig { algorithm=2 debug=1 }
+
+# Display status
+show $LB_NODE:
+
+# Governor behavior:
+# - Scale UP:   CPU > 80% for 5 seconds -> add worker (up to max_workers)
+# - Scale DOWN: CPU < 20% for 60 seconds -> remove worker (min 1)
+#
+# Monitor with:
+#   ngctl msg pppoe_lb0: getstats
+#   sysctl net.graph.pppoe_lb.governor

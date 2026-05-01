@@ -1,0 +1,45 @@
+#
+# PPPoE Load Balancer - Monitoring Examples
+#
+# These commands demonstrate how to monitor the load balancer.
+# Run with ngctl or as standalone shell commands.
+#
+
+# View load balancer status and statistics
+ngctl msg pppoe_lb0: getstats
+
+# View session-to-worker mapping
+ngctl msg pppoe_lb0: getmap
+
+# View detailed node information
+ngctl show pppoe_lb0:
+
+# Display all PPPoE-related netgraph nodes
+ngctl list | grep -E '(pppoe|pppoe_lb)'
+
+# Check governor status via sysctl
+sysctl net.graph.pppoe_lb
+sysctl net.graph.pppoe_lb.governor
+
+# Example output from getstats:
+#
+#   Rec'd response "getstats" (3) from "pppoe_lb0:":
+#   Args:   { sessions=42 workers=2 packets_in=12345 packets_out=12340
+#             discards=0 errors=0 }
+
+# Example output from getmap:
+#
+#   Rec'd response "getmap" (4) from "pppoe_lb0:":
+#   Args:   { num_sessions=3 session_info=[
+#     { sid=1234 worker=0 last_activity=1234567890 },
+#     { sid=1235 worker=1 last_activity=1234567891 },
+#     { sid=1236 worker=0 last_activity=1234567892 } ] }
+
+# Continuous monitoring (update every 5 seconds)
+# watch -n 5 'ngctl msg pppoe_lb0: getstats'
+
+# Enable debug logging (temporarily)
+ngctl msg pppoe_lb0: setconfig { algorithm=0 debug=1 }
+
+# Check kernel module is loaded
+kldstat | grep pppoe_lb

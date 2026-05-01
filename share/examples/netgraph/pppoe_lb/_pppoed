@@ -1,0 +1,65 @@
+#compdef pppoed
+
+# Zsh completion for pppoed
+# Install: Copy to /usr/local/share/zsh/site-functions/ or ~/.zshrc:
+#   fpath=(/path/to/this/file $fpath)
+#   autoload -Uz _pppoed
+
+_pppoed() {
+    local -a opts
+    opts=(
+        '-F[Run in foreground]'
+        '-d[Enable debug output]'
+        '-P:[PID file]:_files'
+        '-a:[Provider name]:->providers'
+        '-e:[Exec command]:_files -g "*"'
+        '-l:[Label name]'
+        '-n:[Netgraph debug level]'
+        '-p:[Provider name]:->providers'
+        '-L[Enable multi-worker mode]'
+        '-w:[Number of workers]:->workers'
+        '-A:[Algorithm]:->algorithm'
+        '-G:[Maximum workers for governor]'
+        '*:interface:->interfaces'
+    )
+
+    local -a algorithms
+    algorithms=(
+        '0:round-robin'
+        '1:hash-based'
+        '2:least-loaded'
+    )
+
+    local -a worker_counts
+    worker_counts=(1 2 4 8 16)
+
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    _arguments -C "$opts[@]"
+
+    case $state in
+        providers)
+            local -a providers
+            if [[ -f /etc/ppp/ppp.conf ]]; then
+                providers=(${(f)"$(grep -E '^[a-zA-Z0-9_]+:' /etc/ppp/ppp.conf 2>/dev/null | cut -d: -f1)"})
+            else
+                providers=(default)
+            fi
+            _describe 'provider' providers
+            ;;
+        workers)
+            _describe 'worker count' worker_counts
+            ;;
+        algorithm)
+            _describe 'algorithm' algorithms
+            ;;
+        interfaces)
+            local -a interfaces
+            interfaces=(${(f)"$(ifconfig -l 2>/dev/null)"})
+            _describe 'interface' interfaces
+            ;;
+    esac
+}
+
+_pppoed "$@"

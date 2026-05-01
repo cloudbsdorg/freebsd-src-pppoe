@@ -1,0 +1,43 @@
+#!/bin/sh
+#
+# PPPoE Load Balancer - 4 Worker Setup
+#
+# This example creates a load balancer with 4 worker nodes.
+# Recommended for quad-core systems.
+#
+# Usage: ngctl -f basic_4workers
+#
+# Modify ETHER_IFACE to match your Ethernet interface.
+
+ETHER_IFACE="em0"
+LB_NODE="pppoe_lb0"
+
+# Create PPPoE load balancer node
+mkpeer $ETHER_IFACE: pppoe_lb lower link0
+name $ETHER_IFACE:lower $LB_NODE
+
+# Create four worker nodes
+mkpeer $LB_NODE: pppoe worker0
+mkpeer worker0: eiface link0 pppoe
+
+mkpeer $LB_NODE: pppoe worker1
+mkpeer worker1: eiface link1 pppoe
+
+mkpeer $LB_NODE: pppoe worker2
+mkpeer worker2: eiface link2 pppoe
+
+mkpeer $LB_NODE: pppoe worker3
+mkpeer worker3: eiface link3 pppoe
+
+# Configure load balancer
+# algorithm=0: Round-robin (default, lowest overhead)
+# algorithm=1: Hash-based (session affinity)
+# algorithm=2: Least-loaded (dynamic)
+msg $LB_NODE: setconfig { algorithm=0 debug=0 }
+
+# Display status
+show $LB_NODE:
+list
+
+# To change algorithm at runtime:
+# ngctl msg pppoe_lb0: setconfig { algorithm=1 debug=0 }
