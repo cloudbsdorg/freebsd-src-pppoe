@@ -30,6 +30,19 @@
 # pppoed_governor_max="8"
 
 # =========================================================================
+# Option 3a: Auto-scaling with custom thresholds
+# =========================================================================
+# pppoed_enable="YES"
+# pppoed_interface="em0"
+# pppoed_loadbalancer="YES"
+# pppoed_workers="2"
+# pppoed_governor_min="1"                  # Minimum workers (default: 1)
+# pppoed_governor_max="8"                 # Maximum workers (0=auto/mp_ncpus)
+# pppoed_governor_poll_interval="5"        # Poll interval in seconds
+# pppoed_cpu_threshold="80"               # Scale up at 80% CPU
+# pppoed_cpu_low_threshold="30"           # Scale down at 30% CPU
+
+# =========================================================================
 # Option 4: Hash-based session affinity (persistent sessions)
 # =========================================================================
 # pppoed_enable="YES"

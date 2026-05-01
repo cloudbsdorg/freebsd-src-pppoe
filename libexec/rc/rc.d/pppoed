@@ -24,7 +24,7 @@ pppoed_start()
 			pppoed_flags="${pppoed_flags} -p ${pppoed_provider}"
 	fi
 
-	# Multithreaded PPPoE support
+		# Multithreaded PPPoE support
 	if [ "${pppoed_loadbalancer}" = "YES" ]; then
 		pppoed_flags="${pppoed_flags} -L"
 		
@@ -38,6 +38,23 @@ pppoed_start()
 		
 		if [ -n "${pppoed_governor_max}" ]; then
 			pppoed_flags="${pppoed_flags} -G ${pppoed_governor_max}"
+		fi
+		
+		# Governor auto-scaling options
+		if [ -n "${pppoed_governor_min}" ]; then
+			pppoed_flags="${pppoed_flags} -M ${pppoed_governor_min}"
+		fi
+		
+		if [ -n "${pppoed_governor_poll_interval}" ]; then
+			pppoed_flags="${pppoed_flags} -I ${pppoed_governor_poll_interval}"
+		fi
+		
+		if [ -n "${pppoed_cpu_threshold}" ]; then
+			pppoed_flags="${pppoed_flags} -c ${pppoed_cpu_threshold}"
+		fi
+		
+		if [ -n "${pppoed_cpu_low_threshold}" ]; then
+			pppoed_flags="${pppoed_flags} -C ${pppoed_cpu_low_threshold}"
 		fi
 	fi
 

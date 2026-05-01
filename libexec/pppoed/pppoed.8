@@ -23,7 +23,7 @@
 .\" OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 .\" SUCH DAMAGE.
 .\"
-.Dd April 23, 2026
+.Dd May 1, 2026
 .Dt PPPOED 8
 .Os
 .Sh NAME
@@ -41,6 +41,10 @@
 .Op Fl w Ar workers
 .Op Fl A Ar algorithm
 .Op Fl G Ar max_workers
+.Op Fl M Ar min_workers
+.Op Fl I Ar poll_interval
+.Op Fl c Ar cpu_threshold
+.Op Fl C Ar cpu_low_threshold
 .Ar interface
 .Sh DESCRIPTION
 The
@@ -202,6 +206,25 @@ When set to 0 (default), the governor auto-detects to the number of CPU cores.
 When set to a positive value, this becomes the hard cap for dynamic worker scaling.
 The value is always clamped to not exceed the number of CPU cores
 .Pq Va mp_ncpus .
+.It Fl M Ar min_workers
+Set the CPU governor minimum workers limit.
+The governor will never scale down below this number.
+Default is 1.
+.It Fl I Ar poll_interval
+Set the governor poll interval in seconds.
+The governor checks CPU and session metrics at this interval.
+Valid range: 1-60 seconds.
+Default is 5 seconds.
+.It Fl c Ar cpu_threshold
+Set the CPU utilization threshold for scaling up.
+When system-wide CPU exceeds this percentage, the governor will add workers.
+Valid range: 1-100.
+Default is 80.
+.It Fl C Ar cpu_low_threshold
+Set the CPU utilization low threshold for scaling down.
+When system-wide CPU falls below this percentage, the governor may remove workers.
+Valid range: 1-100.
+Default is 30.
 .El
 .Pp
 The CPU governor monitors system-wide CPU utilization and can dynamically
