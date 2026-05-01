@@ -31,6 +31,10 @@
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +46,7 @@
 #include <signal.h>
 #include <termios.h>
 #include <sys/select.h>
+#include <pthread.h>
 
 /* Global flag for signal handling */
 static volatile sig_atomic_t g_running = 1;
@@ -50,6 +55,10 @@ static void signal_handler(int sig) {
     (void)sig;
     g_running = 0;
 }
+
+/* Forward declarations for server/client modes */
+static int run_server_mode(int port);
+static int run_client_mode(const char *host, int port);
 
 /* Mode enumeration */
 enum mode {
@@ -1689,6 +1698,11 @@ static void print_usage(const char *prog) {
     printf("  %s accuracy -n 100 -a 0     # Test round-robin with 100 sessions\n", prog);
     printf("  %s governor --trigger scale-up  # Test governor scale-up\n", prog);
     printf("\nNote: diagnose mode will NOT create any sessions - it is safe for production.\n");
+    printf("\nCLIENT-SERVER MODES:\n");
+    printf("  %s --server [--port N]         Start server on port (default: 9001)\n", prog);
+    printf("  %s --client -h HOST [--port N] Connect to server\n", prog);
+    printf("  %s --server &                   Start server in background\n", prog);
+    printf("  %s --client test-server         Connect and run tests\n", prog);
 }
 
 int main(int argc, char **argv) {
@@ -1845,6 +1859,15 @@ int main(int argc, char **argv) {
     /* Setup signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+    
+    /* Handle server/client modes */
+    if (config.server_mode) {
+        return run_server_mode(config.port > 0 ? config.port : 9001);
+    }
+    
+    if (config.client_mode && config.host) {
+        return run_client_mode(config.host, config.port > 0 ? config.port : 9001);
+    }
     
     /* Handle menu mode */
     if (config.mode == MODE_MENU) {
@@ -2043,5 +2066,398 @@ int main(int argc, char **argv) {
             break;
     }
     
+    return 0;
+}
+
+/* =========================================================================
+ * Client-Server Mode Implementation
+ * ========================================================================= */
+
+/* Message types for client-server communication */
+#define MSG_HANDSHAKE      "HANDSHAKE"
+#define MSG_HANDSHAKE_ACK  "HANDSHAKE_ACK"
+#define MSG_TEST_REQUEST   "TEST_REQUEST"
+#define MSG_TEST_START     "TEST_START"
+#define MSG_TEST_DATA      "TEST_DATA"
+#define MSG_TEST_RESULT    "TEST_RESULT"
+#define MSG_STATUS_QUERY   "STATUS_QUERY"
+#define MSG_STATUS_RESPONSE "STATUS_RESPONSE"
+#define MSG_ERROR          "ERROR"
+#define MSG_HEARTBEAT      "HEARTBEAT"
+#define MSG_CLOSE          "CLOSE"
+#define MSG_ACK            "ACK"
+
+typedef enum {
+    SERVER_STATE_IDLE = 0,
+    SERVER_STATE_HANDSHAKE,
+    SERVER_STATE_RUNNING,
+    SERVER_STATE_FINISHED
+} server_state_t;
+
+typedef enum {
+    CLIENT_STATE_DISCONNECTED = 0,
+    CLIENT_STATE_CONNECTING,
+    CLIENT_STATE_HANDSHAKE,
+    CLIENT_STATE_RUNNING,
+    CLIENT_STATE_FINISHED
+} client_state_t;
+
+typedef struct {
+    int sock;
+    char peername[64];
+    time_t connected_at;
+    server_state_t state;
+    struct session_info *sessions;
+    int session_count;
+} client_info_t;
+
+#define MAX_CLIENTS 16
+static client_info_t clients[MAX_CLIENTS];
+static int server_sock = -1;
+static int server_port = 9001;
+
+/* Send a JSON message over socket */
+static int send_message(int sock, const char *type, const char *payload) {
+    char buffer[8192];
+    time_t now = time(NULL);
+    struct tm *tm = gmtime(&now);
+    char timestamp[64];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", tm);
+    
+    snprintf(buffer, sizeof(buffer),
+        "{\"type\":\"%s\",\"timestamp\":\"%s\",\"seq\":%ld,\"payload\":%s}\n",
+        type, timestamp, (long)now, payload ? payload : "{}");
+    
+    int len = strlen(buffer);
+    int sent = 0;
+    while (sent < len) {
+        int n = send(sock, buffer + sent, len - sent, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        sent += n;
+    }
+    return 0;
+}
+
+/* Receive a JSON message from socket */
+static int recv_message(int sock, char *buffer, size_t buflen) {
+    memset(buffer, 0, buflen);
+    int pos = 0;
+    
+    while (pos < (int)buflen - 1) {
+        char c;
+        int n = recv(sock, &c, 1, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        if (c == '\n') break;
+        buffer[pos++] = c;
+    }
+    
+    return pos;
+}
+
+/* Parse message type from JSON */
+static const char *get_message_type(const char *json) {
+    static char type[64];
+    const char *p = strstr(json, "\"type\":\"");
+    if (!p) return NULL;
+    p += 7;
+    int i = 0;
+    while (*p && *p != '"' && i < (int)sizeof(type) - 1) {
+        type[i++] = *p++;
+    }
+    type[i] = '\0';
+    return type;
+}
+
+/* Get system status for status response */
+static void get_system_status(char *buffer, size_t buflen) {
+    struct worker_info *workers = NULL;
+    int worker_count = get_workers(&workers);
+    int total_sessions = 0;
+    
+    for (int i = 0; i < worker_count; i++) {
+        total_sessions += workers[i].sessions;
+    }
+    
+    struct governor_status gov;
+    get_governor_status(&gov);
+    
+    const char *mode_str = gov.enabled ? (gov.mode == 1 ? "auto" : "manual") : "disabled";
+    snprintf(buffer, buflen,
+        "{\"worker_count\":%d,\"total_sessions\":%d,\"governor_enabled\":%s,"
+        "\"cpu_usage\":%.1f,\"mode\":\"%s\"}",
+        worker_count, total_sessions,
+        gov.enabled ? "true" : "false",
+        gov.cpu_usage,
+        mode_str);
+    
+    free(workers);
+}
+
+/* Handle client connection in server mode */
+static void *handle_client(void *arg) {
+    client_info_t *client = (client_info_t *)arg;
+    char buffer[8192];
+    char payload[4096];
+    
+    printf("[SERVER] Client connected from %s\n", client->peername);
+    
+    while (1) {
+        int n = recv_message(client->sock, buffer, sizeof(buffer));
+        if (n <= 0) {
+            printf("[SERVER] Client %s disconnected\n", client->peername);
+            break;
+        }
+        
+        const char *type = get_message_type(buffer);
+        if (!type) continue;
+        
+        printf("[SERVER] Received: %s from %s\n", type, client->peername);
+        
+        if (strcmp(type, MSG_HANDSHAKE) == 0) {
+            /* Send handshake acknowledgment */
+            snprintf(payload, sizeof(payload),
+                "{\"status\":\"connected\",\"server_version\":\"1.0\","
+                "\"capabilities\":[\"diagnose\",\"accuracy\",\"transfer\"]}");
+            send_message(client->sock, MSG_HANDSHAKE_ACK, payload);
+            client->state = SERVER_STATE_HANDSHAKE;
+        }
+        else if (strcmp(type, MSG_STATUS_QUERY) == 0) {
+            get_system_status(payload, sizeof(payload));
+            send_message(client->sock, MSG_STATUS_RESPONSE, payload);
+        }
+        else if (strcmp(type, MSG_TEST_REQUEST) == 0) {
+            /* Acknowledge test request */
+            snprintf(payload, sizeof(payload), "{\"status\":\"accepted\"}");
+            send_message(client->sock, MSG_TEST_START, payload);
+            client->state = SERVER_STATE_RUNNING;
+        }
+        else if (strcmp(type, MSG_CLOSE) == 0) {
+            send_message(client->sock, MSG_ACK, NULL);
+            break;
+        }
+        else if (strcmp(type, MSG_HEARTBEAT) == 0) {
+            send_message(client->sock, MSG_ACK, NULL);
+        }
+    }
+    
+    close(client->sock);
+    client->sock = -1;
+    client->state = SERVER_STATE_IDLE;
+    
+    return NULL;
+}
+
+/* Run server mode */
+static int run_server_mode(int port) {
+    struct sockaddr_in addr;
+    int opt = 1;
+    
+    server_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_sock < 0) {
+        perror("socket");
+        return 1;
+    }
+    
+    setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(port);
+    
+    if (bind(server_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("bind");
+        close(server_sock);
+        return 1;
+    }
+    
+    if (listen(server_sock, 5) < 0) {
+        perror("listen");
+        close(server_sock);
+        return 1;
+    }
+    
+    print_header("PPPoE Load Balancer Test Server");
+    printf("  Listening on port %d\n", port);
+    printf("  Waiting for clients...\n\n");
+    
+    signal(SIGINT, signal_handler);
+    
+    while (g_running) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        
+        int client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_len);
+        if (client_sock < 0) {
+            if (errno == EINTR) continue;
+            perror("accept");
+            continue;
+        }
+        
+        /* Find free client slot */
+        int slot = -1;
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+            if (clients[i].sock < 0) {
+                slot = i;
+                break;
+            }
+        }
+        
+        if (slot < 0) {
+            printf("[SERVER] Too many clients, rejecting\n");
+            close(client_sock);
+            continue;
+        }
+        
+        clients[slot].sock = client_sock;
+        clients[slot].state = SERVER_STATE_IDLE;
+        clients[slot].connected_at = time(NULL);
+        snprintf(clients[slot].peername, sizeof(clients[slot].peername),
+            "%s:%d", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+        
+        /* Handle client in separate thread */
+        pthread_t tid;
+        pthread_create(&tid, NULL, handle_client, &clients[slot]);
+        pthread_detach(tid);
+    }
+    
+    close(server_sock);
+    return 0;
+}
+
+/* Connect to server */
+static int connect_to_server(const char *host, int port) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("socket");
+        return -1;
+    }
+    
+    struct hostent *he = gethostbyname(host);
+    if (!he) {
+        herror("gethostbyname");
+        close(sock);
+        return -1;
+    }
+    
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+    addr.sin_port = htons(port);
+    
+    if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("connect");
+        close(sock);
+        return -1;
+    }
+    
+    return sock;
+}
+
+/* Run client mode */
+static int run_client_mode(const char *host, int port) {
+    print_header("PPPoE Load Balancer Test Client");
+    printf("  Connecting to %s:%d...\n", host, port);
+    
+    int sock = connect_to_server(host, port);
+    if (sock < 0) {
+        printf("  Failed to connect to server\n\n");
+        return 1;
+    }
+    
+    printf("  Connected! Sending handshake...\n\n");
+    
+    /* Send handshake */
+    char payload[512];
+    snprintf(payload, sizeof(payload),
+        "{\"client_version\":\"1.0\",\"capabilities\":[\"diagnose\",\"accuracy\",\"transfer\"],"
+        "\"hostname\":\"%s\"}", "test-client");
+    
+    if (send_message(sock, MSG_HANDSHAKE, payload) < 0) {
+        printf("  Failed to send handshake\n\n");
+        close(sock);
+        return 1;
+    }
+    
+    /* Wait for handshake ack */
+    char buffer[8192];
+    int n = recv_message(sock, buffer, sizeof(buffer));
+    if (n <= 0) {
+        printf("  No response from server\n\n");
+        close(sock);
+        return 1;
+    }
+    
+    const char *type = get_message_type(buffer);
+    if (!type || strcmp(type, MSG_HANDSHAKE_ACK) != 0) {
+        printf("  Unexpected response: %s\n\n", type ? type : "unknown");
+        close(sock);
+        return 1;
+    }
+    
+    printf("  ");
+    if (USE_COLOR) printf("%s", COLOR_GREEN);
+    printf("Connected to server successfully!\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    printf("\n");
+    
+    /* Main client loop */
+    signal(SIGINT, signal_handler);
+    
+    while (g_running) {
+        printf("\n=== Client Menu ===\n");
+        printf("[1] Query server status\n");
+        printf("[2] Request diagnostic report\n");
+        printf("[3] Request accuracy test\n");
+        printf("[4] Request transfer test\n");
+        printf("[5] Quit\n");
+        printf("\nChoice: ");
+        
+        char choice[16];
+        if (!fgets(choice, sizeof(choice), stdin)) break;
+        
+        int cmd = atoi(choice);
+        
+        switch (cmd) {
+            case 1:
+                send_message(sock, MSG_STATUS_QUERY, NULL);
+                n = recv_message(sock, buffer, sizeof(buffer));
+                if (n > 0) {
+                    printf("\nServer Status:\n%s\n\n", buffer);
+                }
+                break;
+                
+            case 2:
+            case 3:
+            case 4:
+                {
+                    const char *test_type = (cmd == 2) ? "diagnose" : 
+                                            (cmd == 3) ? "accuracy" : "transfer";
+                    snprintf(payload, sizeof(payload), "{\"test\":\"%s\"}", test_type);
+                    send_message(sock, MSG_TEST_REQUEST, payload);
+                    n = recv_message(sock, buffer, sizeof(buffer));
+                    if (n > 0) {
+                        printf("\nTest Response:\n%s\n\n", buffer);
+                    }
+                }
+                break;
+                
+            case 5:
+                send_message(sock, MSG_CLOSE, NULL);
+                g_running = 0;
+                break;
+        }
+    }
+    
+    close(sock);
     return 0;
 }
