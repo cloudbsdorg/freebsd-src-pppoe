@@ -30,18 +30,118 @@
 
 #include <err.h>
 #include <netgraph.h>
-#include <netgraph/ng_pppoe_lb.h>
+#include <sys/sysctl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <unistd.h>
 
 #include "ngctl.h"
+
+/* PPPoE Load Balancer constants and structures (userland copy) */
+#define NGM_PPPOE_LB_COOKIE		1089893073
+
+#define NG_PPPOE_LB_NODE_TYPE		"pppoe_lb"
+
+/* Worker states */
+#define NG_PPPOE_LB_WORKER_ACTIVE		0
+#define NG_PPPOE_LB_WORKER_DRAINING		1
+#define NG_PPPOE_LB_WORKER_PENDING_REMOVAL	2
+
+/* Governor decisions */
+#define NG_PPPOE_LB_GOV_DECISION_NONE		0
+#define NG_PPPOE_LB_GOV_DECISION_SCALE_UP	1
+#define NG_PPPOE_LB_GOV_DECISION_SCALE_DOWN	2
+#define NG_PPPOE_LB_GOV_DECISION_CANCEL_DOWN	3
+
+/* Governor reasons */
+#define NG_PPPOE_LB_GOV_REASON_NONE		0
+#define NG_PPPOE_LB_GOV_REASON_CPU_HIGH		1
+#define NG_PPPOE_LB_GOV_REASON_CPU_LOW		2
+#define NG_PPPOE_LB_GOV_REASON_SESS_HIGH	3
+#define NG_PPPOE_LB_GOV_REASON_SESS_LOW		4
+
+/* Message types */
+enum {
+	NGM_PPPOE_LB_ADD_WORKER = 1,
+	NGM_PPPOE_LB_REMOVE_WORKER,
+	NGM_PPPOE_LB_SET_CONFIG,
+	NGM_PPPOE_LB_GET_STATS,
+	NGM_PPPOE_LB_GET_MAP,
+	NGM_PPPOE_LB_SET_WORKER_STATE,
+	NGM_PPPOE_LB_GET_WORKER_INFO,
+	NGM_PPPOE_LB_TRIGGER_SCALE,
+};
+
+/* Load balancing algorithms */
+#define NG_PPPOE_LB_ALGO_ROUND_ROBIN	0
+#define NG_PPPOE_LB_ALGO_HASH		1
+#define NG_PPPOE_LB_ALGO_LEAST_LOADED	2
+
+/* Structures */
+struct ng_pppoe_lb_config {
+	uint32_t	algorithm;
+	uint32_t	max_workers;
+	uint32_t	debug_level;
+};
+
+struct ng_pppoe_lb_stats {
+	uint64_t	packets_in;
+	uint64_t	packets_out;
+	uint64_t	sessions_created;
+	uint64_t	sessions_destroyed;
+	uint32_t	num_workers;
+	uint32_t	num_workers_active;
+	uint32_t	algorithm;
+	uint32_t	map_count;
+};
+
+struct ng_pppoe_lb_map_entry {
+	uint16_t	session_id;
+	uint16_t	worker_index;
+	uint32_t	last_activity;
+};
+
+struct ng_pppoe_lb_map {
+	uint32_t	count;
+	uint32_t	max_entries;
+	struct ng_pppoe_lb_map_entry entries[];
+};
+
+struct ng_pppoe_lb_worker_info {
+	int32_t		worker_id;
+	uint32_t	state;
+	uint32_t	sessions;
+	uint32_t	last_activity;
+	uint32_t	uptime;
+	uint64_t	packets_in;
+	uint64_t	packets_out;
+	uint64_t	bytes_in;
+	uint64_t	bytes_out;
+};
+
+struct ng_pppoe_lb_set_worker_state {
+	int32_t		worker_id;
+	uint32_t	state;
+};
+
+struct ng_pppoe_lb_get_worker_info {
+	int32_t		worker_id;
+};
+
+struct ng_pppoe_lb_trigger_scale {
+	uint32_t	direction;
+};
 
 static int PppoeLbShowCmd(int ac, char **av);
 static int PppoeLbConfigCmd(int ac, char **av);
 static int PppoeLbStatsCmd(int ac, char **av);
 static int PppoeLbMapCmd(int ac, char **av);
+static int PppoeLbWorkersCmd(int ac, char **av);
+static int PppoeLbWorkerCmd(int ac, char **av);
+static int PppoeLbGovernorCmd(int ac, char **av);
+static int PppoeLbTriggerScaleCmd(int ac, char **av);
 
 const struct ngcmd pppoe_lb_show_cmd = {
 	PppoeLbShowCmd,
@@ -76,11 +176,43 @@ const struct ngcmd pppoe_lb_map_cmd = {
 	{ "pppoe_lb sessions" }
 };
 
+const struct ngcmd pppoe_lb_workers_cmd = {
+	PppoeLbWorkersCmd,
+	"pppoe_lb workers <path>",
+	"Show all workers and their states",
+	"Displays detailed information for all workers including state, sessions, and uptime.",
+	{ "pppoe_lb showworkers" }
+};
+
+const struct ngcmd pppoe_lb_worker_cmd = {
+	PppoeLbWorkerCmd,
+	"pppoe_lb worker <path> <id> [state <0|1|2>]",
+	"Get or set worker state",
+	"Get worker info or set worker state: 0=ACTIVE, 1=DRAINING, 2=PENDING_REMOVAL.",
+	{ "pppoe_lb wstate" }
+};
+
+const struct ngcmd pppoe_lb_governor_cmd = {
+	PppoeLbGovernorCmd,
+	"pppoe_lb governor <path> [enable|disable]",
+	"Enable or disable the CPU governor",
+	"Enable or disable automatic worker scaling based on CPU load.",
+	{ "pppoe_lb gov" }
+};
+
+const struct ngcmd pppoe_lb_trigger_scale_cmd = {
+	PppoeLbTriggerScaleCmd,
+	"pppoe_lb trigger <path> [up|down]",
+	"Trigger a scale event for testing",
+	"Forces a scale up or scale down decision (for testing governor logic).",
+	{ "pppoe_lb scale" }
+};
+
 static int
 PppoeLbShowCmd(int ac, char **av)
 {
 	char *path;
-	struct ng_mesg *resp;
+	struct ng_mesg *resp = NULL;
 	u_char rbuf[sizeof(struct ng_mesg) + sizeof(struct ng_pppoe_lb_stats)];
 	int ch;
 
@@ -219,7 +351,7 @@ static int
 PppoeLbStatsCmd(int ac, char **av)
 {
 	char *path;
-	struct ng_mesg *resp;
+	struct ng_mesg *resp = NULL;
 	u_char rbuf[sizeof(struct ng_mesg) + sizeof(struct ng_pppoe_lb_stats)];
 	int ch;
 
@@ -289,7 +421,7 @@ static int
 PppoeLbMapCmd(int ac, char **av)
 {
 	char *path;
-	struct ng_mesg *resp;
+	struct ng_mesg *resp = NULL;
 	struct ng_pppoe_lb_map *map;
 	u_char rbuf[4096];  /* Buffer for up to ~256 session entries */
 	int ch;
@@ -354,5 +486,357 @@ PppoeLbMapCmd(int ac, char **av)
 	printf("\n  Total sessions: %u\n", map->count);
 
 	free(resp);
+	return (CMDRTN_OK);
+}
+
+static const char *
+worker_state_str(uint32_t state)
+{
+	switch (state) {
+	case NG_PPPOE_LB_WORKER_ACTIVE:
+		return "ACTIVE";
+	case NG_PPPOE_LB_WORKER_DRAINING:
+		return "DRAINING";
+	case NG_PPPOE_LB_WORKER_PENDING_REMOVAL:
+		return "PENDING_REMOVAL";
+	default:
+		return "UNKNOWN";
+	}
+}
+
+static const char *
+governor_decision_str(int decision)
+{
+	switch (decision) {
+	case NG_PPPOE_LB_GOV_DECISION_NONE:
+		return "none";
+	case NG_PPPOE_LB_GOV_DECISION_SCALE_UP:
+		return "scale_up";
+	case NG_PPPOE_LB_GOV_DECISION_SCALE_DOWN:
+		return "scale_down";
+	case NG_PPPOE_LB_GOV_DECISION_CANCEL_DOWN:
+		return "cancel_down";
+	default:
+		return "unknown";
+	}
+}
+
+static const char *
+governor_reason_str(int reason)
+{
+	switch (reason) {
+	case NG_PPPOE_LB_GOV_REASON_NONE:
+		return "none";
+	case NG_PPPOE_LB_GOV_REASON_CPU_HIGH:
+		return "cpu_high";
+	case NG_PPPOE_LB_GOV_REASON_CPU_LOW:
+		return "cpu_low";
+	case NG_PPPOE_LB_GOV_REASON_SESS_HIGH:
+		return "sessions_high";
+	case NG_PPPOE_LB_GOV_REASON_SESS_LOW:
+		return "sessions_low";
+	default:
+		return "unknown";
+	}
+}
+
+/* Helper to read sysctl values in userland */
+static int
+read_sysctl_int(const char *name, int *value)
+{
+	size_t len = sizeof(*value);
+	return sysctlbyname(name, value, &len, NULL, 0);
+}
+
+static int
+PppoeLbWorkersCmd(int ac, char **av)
+{
+	char *path;
+	struct ng_mesg *resp = NULL;
+	struct ng_pppoe_lb_get_worker_info req;
+	struct ng_pppoe_lb_worker_info *info;
+	u_char rbuf[sizeof(struct ng_mesg) + sizeof(struct ng_pppoe_lb_worker_info)];
+	int ch;
+	int i, num_workers;
+
+	/* Get options */
+	optreset = 1;
+	optind = 1;
+	while ((ch = getopt(ac, av, "")) != -1) {
+		switch (ch) {
+		default:
+			return (CMDRTN_USAGE);
+		}
+	}
+	ac -= optind;
+	av += optind;
+
+	/* Get arguments */
+	switch (ac) {
+	case 1:
+		path = av[0];
+		break;
+	default:
+		return (CMDRTN_USAGE);
+	}
+
+	/* First get stats to find number of workers */
+	if (NgSendMsg(csock, path, NGM_PPPOE_LB_COOKIE,
+	    NGM_PPPOE_LB_GET_STATS, NULL, 0) < 0) {
+		warn("send stats msg");
+		return (CMDRTN_ERROR);
+	}
+
+	if (NgRecvMsg(csock, resp, sizeof(rbuf), NULL) < 0) {
+		warn("recv stats msg");
+		return (CMDRTN_ERROR);
+	}
+
+	struct ng_pppoe_lb_stats *stats = (struct ng_pppoe_lb_stats *)resp->data;
+	num_workers = stats->num_workers;
+	free(resp);
+
+	if (num_workers == 0) {
+		printf("PPPoE Load Balancer Workers:\n");
+		printf("  No workers configured\n");
+		return (CMDRTN_OK);
+	}
+
+	printf("PPPoE Load Balancer Workers:\n");
+	printf("\n");
+	printf("  %-6s %-15s %-10s %-10s %-10s %-15s\n",
+	    "ID", "State", "Sessions", "Bytes In", "Bytes Out", "Last Activity");
+	printf("  %-6s %-15s %-10s %-10s %-10s %-15s\n",
+	    "------", "---------------", "----------", "----------", "----------", "---------------");
+
+	for (i = 0; i < num_workers; i++) {
+		req.worker_id = i;
+
+		if (NgSendMsg(csock, path, NGM_PPPOE_LB_COOKIE,
+		    NGM_PPPOE_LB_GET_WORKER_INFO, &req, sizeof(req)) < 0) {
+			warn("send worker info msg for worker %d", i);
+			continue;
+		}
+
+		if (NgRecvMsg(csock, resp, sizeof(rbuf), NULL) < 0) {
+			warn("recv worker info msg");
+			continue;
+		}
+
+		info = (struct ng_pppoe_lb_worker_info *)resp->data;
+		printf("  %-6d %-15s %-10u %-10lu %-10lu %-15u\n",
+		    info->worker_id,
+		    worker_state_str(info->state),
+		    info->sessions,
+		    (u_long)info->bytes_in,
+		    (u_long)info->bytes_out,
+		    info->last_activity);
+
+		free(resp);
+	}
+
+	return (CMDRTN_OK);
+}
+
+static int
+PppoeLbWorkerCmd(int ac, char **av)
+{
+	char *path;
+	int worker_id = -1;
+	int new_state = -1;
+	struct ng_pppoe_lb_set_worker_state req;
+	int ch;
+
+	/* Get options */
+	optreset = 1;
+	optind = 1;
+	while ((ch = getopt(ac, av, "")) != -1) {
+		switch (ch) {
+		default:
+			return (CMDRTN_USAGE);
+		}
+	}
+	ac -= optind;
+	av += optind;
+
+	/* Get arguments */
+	if (ac < 2)
+		return (CMDRTN_USAGE);
+
+	path = av[0];
+	worker_id = atoi(av[1]);
+	ac -= 2;
+	av += 2;
+
+	/* Check for state change */
+	if (ac >= 2 && strcmp(av[0], "state") == 0) {
+		new_state = atoi(av[1]);
+		if (new_state < 0 || new_state > 2) {
+			warnx("Invalid state: %d (valid: 0=ACTIVE, 1=DRAINING, 2=PENDING_REMOVAL)", new_state);
+			return (CMDRTN_USAGE);
+		}
+	}
+
+	if (new_state >= 0) {
+		/* Set worker state */
+		req.worker_id = worker_id;
+		req.state = new_state;
+
+		if (NgSendMsg(csock, path, NGM_PPPOE_LB_COOKIE,
+		    NGM_PPPOE_LB_SET_WORKER_STATE, &req, sizeof(req)) < 0) {
+			warn("send set worker state msg");
+			return (CMDRTN_ERROR);
+		}
+
+		printf("Worker %d state set to %s\n", worker_id, worker_state_str(new_state));
+		return (CMDRTN_OK);
+	}
+
+	/* Get worker info */
+	struct ng_mesg *resp = NULL;
+	struct ng_pppoe_lb_get_worker_info greq;
+	struct ng_pppoe_lb_worker_info *info;
+	u_char rbuf[sizeof(struct ng_mesg) + sizeof(struct ng_pppoe_lb_worker_info)];
+
+	greq.worker_id = worker_id;
+
+	if (NgSendMsg(csock, path, NGM_PPPOE_LB_COOKIE,
+	    NGM_PPPOE_LB_GET_WORKER_INFO, &greq, sizeof(greq)) < 0) {
+		warn("send worker info msg");
+		return (CMDRTN_ERROR);
+	}
+
+	if (NgRecvMsg(csock, resp, sizeof(rbuf), NULL) < 0) {
+		warn("recv worker info msg");
+		return (CMDRTN_ERROR);
+	}
+
+	info = (struct ng_pppoe_lb_worker_info *)resp->data;
+
+	printf("Worker %d Information:\n", worker_id);
+	printf("  State:        %s (%u)\n", worker_state_str(info->state), info->state);
+	printf("  Sessions:     %u\n", info->sessions);
+	printf("  Last Activity: %u\n", info->last_activity);
+	printf("  Uptime:       %u seconds\n", info->uptime);
+	printf("  Bytes In:     %lu\n", (u_long)info->bytes_in);
+	printf("  Bytes Out:    %lu\n", (u_long)info->bytes_out);
+
+	free(resp);
+	return (CMDRTN_OK);
+}
+
+static int
+PppoeLbGovernorCmd(int ac, char **av)
+{
+	char *path;
+	int ch;
+	int enabled = 0, mode = 0, min_workers = 1, max_workers = 0, cpu_threshold = 80, cpu_low_threshold = 30;
+	int current_workers = 0, active_workers = 0, draining_workers = 0, pending_removals = 0;
+	int last_decision = 0, last_reason = 0;
+
+	/* Get options */
+	optreset = 1;
+	optind = 1;
+	while ((ch = getopt(ac, av, "")) != -1) {
+		switch (ch) {
+		default:
+			return (CMDRTN_USAGE);
+		}
+	}
+	ac -= optind;
+	av += optind;
+
+	/* Get arguments */
+	if (ac < 1)
+		return (CMDRTN_USAGE);
+
+	path = av[0];
+	(void)path;  /* Path is informational, sysctls are global */
+
+	/* Get governor status via sysctl */
+	read_sysctl_int("net.graph.pppoe_lb.governor.enabled", &enabled);
+	read_sysctl_int("net.graph.pppoe_lb.governor.mode", &mode);
+	read_sysctl_int("net.graph.pppoe_lb.governor.min_workers", &min_workers);
+	read_sysctl_int("net.graph.pppoe_lb.governor.max_workers", &max_workers);
+	read_sysctl_int("net.graph.pppoe_lb.governor.cpu_threshold", &cpu_threshold);
+	read_sysctl_int("net.graph.pppoe_lb.governor.cpu_low_threshold", &cpu_low_threshold);
+	read_sysctl_int("net.graph.pppoe_lb.governor.current_workers", &current_workers);
+	read_sysctl_int("net.graph.pppoe_lb.governor.active_workers", &active_workers);
+	read_sysctl_int("net.graph.pppoe_lb.governor.draining_workers", &draining_workers);
+	read_sysctl_int("net.graph.pppoe_lb.governor.pending_removals", &pending_removals);
+	read_sysctl_int("net.graph.pppoe_lb.governor.last_decision", &last_decision);
+	read_sysctl_int("net.graph.pppoe_lb.governor.last_reason", &last_reason);
+
+	printf("PPPoE Governor Status:\n");
+	printf("\n");
+	printf("  Configuration:\n");
+	printf("    Enabled:        %s\n", enabled ? "Yes" : "No");
+	printf("    Mode:           %s\n", mode ? "Auto" : "Manual");
+	printf("    Min Workers:    %d\n", min_workers);
+	printf("    Max Workers:    %s\n", max_workers == 0 ? "auto (mp_ncpus)" : "manual");
+	printf("    CPU Threshold:  %d%%\n", cpu_threshold);
+	printf("    CPU Low:        %d%%\n", cpu_low_threshold);
+	printf("\n");
+	printf("  Current State:\n");
+	printf("    Current Workers:  %d\n", current_workers);
+	printf("    Active Workers:   %d\n", active_workers);
+	printf("    Draining Workers: %d\n", draining_workers);
+	printf("    Pending Removals: %d\n", pending_removals);
+	printf("\n");
+	printf("  Last Decision:    %s (%s)\n",
+	    governor_decision_str(last_decision),
+	    governor_reason_str(last_reason));
+	printf("\n");
+	printf("  To configure, use sysctl:\n");
+	printf("    sysctl net.graph.pppoe_lb.governor.enabled=1    # Enable\n");
+	printf("    sysctl net.graph.pppoe_lb.governor.enabled=0    # Disable\n");
+	printf("    sysctl net.graph.pppoe_lb.governor.cpu_threshold=80\n");
+
+	return (CMDRTN_OK);
+}
+
+static int
+PppoeLbTriggerScaleCmd(int ac, char **av)
+{
+	char *path;
+	char *direction_str = NULL;
+	struct ng_pppoe_lb_trigger_scale req;
+	int ch;
+
+	/* Get options */
+	optreset = 1;
+	optind = 1;
+	while ((ch = getopt(ac, av, "")) != -1) {
+		switch (ch) {
+		default:
+			return (CMDRTN_USAGE);
+		}
+	}
+	ac -= optind;
+	av += optind;
+
+	/* Get arguments */
+	if (ac < 2)
+		return (CMDRTN_USAGE);
+
+	path = av[0];
+	direction_str = av[1];
+
+	if (strcmp(direction_str, "up") == 0) {
+		req.direction = 0;
+	} else if (strcmp(direction_str, "down") == 0) {
+		req.direction = 1;
+	} else {
+		warnx("Invalid direction: %s (use 'up' or 'down')", direction_str);
+		return (CMDRTN_USAGE);
+	}
+
+	if (NgSendMsg(csock, path, NGM_PPPOE_LB_COOKIE,
+	    NGM_PPPOE_LB_TRIGGER_SCALE, &req, sizeof(req)) < 0) {
+		warn("send trigger scale msg");
+		return (CMDRTN_ERROR);
+	}
+
+	printf("Scale %s triggered\n", direction_str);
 	return (CMDRTN_OK);
 }

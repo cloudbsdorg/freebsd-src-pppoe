@@ -55,12 +55,33 @@ enum {
 	NGM_PPPOE_LB_SET_CONFIG,
 	NGM_PPPOE_LB_GET_STATS,
 	NGM_PPPOE_LB_GET_MAP,
+	NGM_PPPOE_LB_SET_WORKER_STATE,		/* Set individual worker state */
+	NGM_PPPOE_LB_GET_WORKER_INFO,		/* Get individual worker info */
+	NGM_PPPOE_LB_TRIGGER_SCALE,		/* Trigger scale event for testing */
 };
 
 /* Load balancing algorithms */
 #define NG_PPPOE_LB_ALGO_ROUND_ROBIN	0
 #define NG_PPPOE_LB_ALGO_HASH		1
 #define NG_PPPOE_LB_ALGO_LEAST_LOADED	2
+
+/* Worker states for auto-scaling */
+#define NG_PPPOE_LB_WORKER_ACTIVE		0
+#define NG_PPPOE_LB_WORKER_DRAINING		1
+#define NG_PPPOE_LB_WORKER_PENDING_REMOVAL	2
+
+/* Governor decisions */
+#define NG_PPPOE_LB_GOV_DECISION_NONE		0
+#define NG_PPPOE_LB_GOV_DECISION_SCALE_UP	1
+#define NG_PPPOE_LB_GOV_DECISION_SCALE_DOWN	2
+#define NG_PPPOE_LB_GOV_DECISION_CANCEL_DOWN	3
+
+/* Governor reasons */
+#define NG_PPPOE_LB_GOV_REASON_NONE		0
+#define NG_PPPOE_LB_GOV_REASON_CPU_HIGH		1
+#define NG_PPPOE_LB_GOV_REASON_CPU_LOW		2
+#define NG_PPPOE_LB_GOV_REASON_SESS_HIGH	3
+#define NG_PPPOE_LB_GOV_REASON_SESS_LOW		4
 
 /* Configuration structure for NGM_PPPOE_LB_SET_CONFIG */
 struct ng_pppoe_lb_config {
@@ -93,6 +114,35 @@ struct ng_pppoe_lb_map {
 	uint32_t	count;			/* Number of entries */
 	uint32_t	max_entries;		/* Maximum entries to return */
 	struct ng_pppoe_lb_map_entry entries[];	/* Variable-length array */
+};
+
+/* Worker info structure */
+struct ng_pppoe_lb_worker_info {
+	int32_t		worker_id;		/* Worker index */
+	uint32_t	state;			/* Worker state (ACTIVE/DRAINING/PENDING_REMOVAL) */
+	uint32_t	sessions;		/* Number of active sessions */
+	uint32_t	last_activity;		/* Last activity timestamp */
+	uint32_t	uptime;			/* Worker uptime in seconds */
+	uint64_t	packets_in;		/* Packets received */
+	uint64_t	packets_out;		/* Packets sent */
+	uint64_t	bytes_in;		/* Bytes received */
+	uint64_t	bytes_out;		/* Bytes sent */
+};
+
+/* Set worker state message */
+struct ng_pppoe_lb_set_worker_state {
+	int32_t		worker_id;		/* Worker index */
+	uint32_t	state;			/* New state */
+};
+
+/* Get worker info message */
+struct ng_pppoe_lb_get_worker_info {
+	int32_t		worker_id;		/* Worker index */
+};
+
+/* Trigger scale message (for testing) */
+struct ng_pppoe_lb_trigger_scale {
+	uint32_t	direction;		/* 0=up, 1=down */
 };
 
 /* Add worker message */
@@ -141,6 +191,35 @@ struct ng_pppoe_lb_remove_worker {
 	  { "count",	&ng_parse_uint32_type },	\
 	  { "max_entries",	&ng_parse_uint32_type },	\
 	  { "entries",	&ng_pppoe_lb_map_entry_array_type },	\
+	  { NULL }						\
+}
+
+#define NG_PPPOE_LB_WORKER_INFO_TYPE_INFO {	\
+	  { "worker_id",	&ng_parse_int32_type },	\
+	  { "state",	&ng_parse_uint32_type },	\
+	  { "sessions",	&ng_parse_uint32_type },	\
+	  { "last_activity",	&ng_parse_uint32_type },	\
+	  { "uptime",	&ng_parse_uint32_type },	\
+	  { "packets_in",	&ng_parse_uint64_type },	\
+	  { "packets_out",	&ng_parse_uint64_type },	\
+	  { "bytes_in",	&ng_parse_uint64_type },	\
+	  { "bytes_out",	&ng_parse_uint64_type },	\
+	  { NULL }						\
+}
+
+#define NG_PPPOE_LB_SET_WORKER_STATE_TYPE_INFO {	\
+	  { "worker_id",	&ng_parse_int32_type },	\
+	  { "state",	&ng_parse_uint32_type },	\
+	  { NULL }						\
+}
+
+#define NG_PPPOE_LB_GET_WORKER_INFO_TYPE_INFO {	\
+	  { "worker_id",	&ng_parse_int32_type },	\
+	  { NULL }						\
+}
+
+#define NG_PPPOE_LB_TRIGGER_SCALE_TYPE_INFO {	\
+	  { "direction",	&ng_parse_uint32_type },	\
 	  { NULL }						\
 }
 
