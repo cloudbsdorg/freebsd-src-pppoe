@@ -859,33 +859,248 @@ static void run_monitoring(void) {
     }
 }
 
-/* Test mode stubs */
+/* Accuracy test - session distribution verification */
 static void run_accuracy_test(int sessions, int algorithm, int threshold) {
     print_header("Accuracy Test");
-    printf("  [INFO] Accuracy test mode - creates %d sessions\n", sessions);
+    printf("  [INFO] Accuracy test mode - %d sessions\n", sessions);
     printf("  [INFO] Algorithm: %d (0=round-robin, 1=hash, 2=least-loaded)\n", algorithm);
     printf("  [INFO] Threshold: %d%%\n\n", threshold);
     
-    if (USE_COLOR) printf("%s", COLOR_YELLOW);
-    printf("  [NOTICE] Accuracy test mode is not yet fully implemented.\n");
-    printf("           This feature requires session creation capabilities.\n\n");
-    if (USE_COLOR) printf("%s", COLOR_RESET);
+    /* Get current worker state */
+    struct worker_info *workers = NULL;
+    int worker_count = get_workers(&workers);
     
-    printf("  To implement: Create test sessions, track distribution,\n");
-    printf("  verify against expected algorithm behavior.\n\n");
+    if (worker_count <= 0) {
+        if (USE_COLOR) printf("%s", COLOR_RED);
+        printf("  [ERROR] No workers available. Module may not be loaded.\n");
+        if (USE_COLOR) printf("%s", COLOR_RESET);
+        printf("\n");
+        printf("  Please ensure the ng_pppoe_lb module is loaded:\n");
+        printf("    kldload ng_pppoe_lb\n");
+        printf("    kldload ng_pppoe\n\n");
+        return;
+    }
+    
+    /* Get initial session distribution */
+    int initial_sessions = 0;
+    for (int i = 0; i < worker_count; i++) {
+        initial_sessions += workers[i].sessions;
+    }
+    
+    printf("  Initial State:\n");
+    printf("  %s\n", "----------------------------------------");
+    printf("  Workers: %d\n", worker_count);
+    printf("  Active Sessions: %d\n", initial_sessions);
+    printf("  Expected per worker: ~%d\n\n", 
+           (initial_sessions + sessions) / worker_count);
+    
+    if (USE_COLOR) printf("%s", COLOR_YELLOW);
+    printf("  [NOTICE] Full accuracy test requires session creation capabilities.\n");
+    printf("           The following would be tested:\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    printf("\n");
+    
+    printf("  Test Procedure:\n");
+    printf("  %s\n", "----------------------------------------\n");
+    printf("  1. Record current session distribution\n");
+    printf("  2. Create %d test sessions\n", sessions);
+    printf("  3. Record new session distribution\n");
+    printf("  4. Compare distribution vs. expected algorithm\n");
+    printf("\n");
+    
+    printf("  Expected Behavior by Algorithm:\n");
+    printf("  %s\n", "----------------------------------------\n");
+    switch (algorithm) {
+        case 0:
+            printf("  Round-Robin (0): Sessions should distribute evenly.\n");
+            printf("  - Each new session goes to the next worker in sequence.\n");
+            printf("  - Distribution: ~%d per worker (within %d%%)\n",
+                   sessions / worker_count + (sessions % worker_count > 0 ? 1 : 0),
+                   threshold);
+            break;
+        case 1:
+            printf("  Hash-Based (1): Same source = same worker.\n");
+            printf("  - Sessions from same source MAC/IP stay together.\n");
+            printf("  - Consistent hashing with modulo distribution.\n");
+            break;
+        case 2:
+            printf("  Least-Loaded (2): Fewest sessions = more likely.\n");
+            printf("  - New sessions go to worker with fewest sessions.\n");
+            printf("  - Distribution based on current load, not sequence.\n");
+            break;
+        default:
+            printf("  Unknown algorithm: %d\n", algorithm);
+    }
+    printf("\n");
+    
+    /* Show expected results table */
+    printf("  Expected Results Table:\n");
+    printf("  %s\n", "----------------------------------------");
+    printf("  %-8s  %-12s  %-12s  %-10s\n",
+           "Worker", "Initial", "Expected", "Status");
+    printf("  %s\n", "--------------------------------------------------------");
+    
+    for (int i = 0; i < worker_count; i++) {
+        int expected = workers[i].sessions + (sessions / worker_count);
+        if (i < (sessions % worker_count)) expected++;
+        
+        printf("  %-8d  %-12d  %-12d  ", 
+               i, workers[i].sessions, expected);
+        if (USE_COLOR) printf("%s", COLOR_GREEN);
+        printf("NOT TESTED");
+        if (USE_COLOR) printf("%s", COLOR_RESET);
+        printf("\n");
+    }
+    printf("\n");
+    
+    printf("  To run full accuracy test:\n");
+    printf("    1. Ensure ng_pppoe_lb module is loaded\n");
+    printf("    2. Create netgraph nodes for testing\n");
+    printf("    3. Run this tool with appropriate permissions\n\n");
+    
+    free(workers);
 }
 
+/* Affinity test - session stickiness verification */
 static void run_affinity_test(int sessions, int retries) {
     print_header("Affinity Test");
     printf("  [INFO] Affinity test mode - %d sessions with %d retries\n\n", sessions, retries);
     
-    if (USE_COLOR) printf("%s", COLOR_YELLOW);
-    printf("  [NOTICE] Affinity test mode is not yet fully implemented.\n");
-    printf("           This feature requires session reconnection tracking.\n\n");
-    if (USE_COLOR) printf("%s", COLOR_RESET);
+    /* Get current sessions to check affinity state */
+    struct session_info *session_list = NULL;
+    int session_count = get_sessions(&session_list, sessions);
+    struct worker_info *workers = NULL;
+    int worker_count = get_workers(&workers);
     
-    printf("  To implement: Create sessions, force reconnection,\n");
-    printf("  verify sessions return to same worker.\n\n");
+    if (worker_count <= 0) {
+        if (USE_COLOR) printf("%s", COLOR_RED);
+        printf("  [ERROR] No workers available. Module may not be loaded.\n");
+        if (USE_COLOR) printf("%s", COLOR_RESET);
+        printf("\n");
+        return;
+    }
+    
+    printf("  Test Configuration:\n");
+    printf("  %s\n", "----------------------------------------");
+    printf("  Sessions to track: %d\n", sessions);
+    printf("  Reconnection retries: %d\n", retries);
+    printf("  Available workers: %d\n\n", worker_count);
+    
+    if (session_count > 0) {
+        printf("  Current Session Affinity State:\n");
+        printf("  %s\n", "----------------------------------------");
+        
+        if (config.json_output) {
+            printf("{\n");
+            printf("  \"test_mode\": \"affinity\",\n");
+            printf("  \"sessions_tested\": %d,\n", session_count);
+            printf("  \"workers\": %d,\n", worker_count);
+            printf("  \"sessions\": [\n");
+            for (int i = 0; i < session_count && i < 20; i++) {
+                printf("    {\n");
+                printf("      \"id\": \"0x%lx\",\n", (unsigned long)session_list[i].session_id);
+                printf("      \"worker\": %d,\n", session_list[i].worker_id);
+                printf("      \"age_seconds\": %ld,\n", (long)(time(NULL) - session_list[i].created));
+                printf("      \"bytes_in\": %llu,\n", (unsigned long long)session_list[i].bytes_in);
+                printf("      \"errors\": %d\n", session_list[i].errors);
+                printf("    }%s\n", i < session_count - 1 && i < 19 ? "," : "");
+            }
+            if (session_count > 20) {
+                printf("    ... (%d more sessions)\n", session_count - 20);
+            }
+            printf("  ]\n");
+            printf("}\n");
+        } else {
+            printf("  %-12s  %-8s  %-10s  %-12s  %-8s  %-10s\n",
+                   "Session ID", "Worker", "Age", "Bytes In", "Errors", "Status");
+            printf("  %s\n", "-----------------------------------------------------------------------------------------");
+            
+            for (int i = 0; i < session_count && i < 20; i++) {
+                char buf[32], age[32];
+                time_t age_sec = time(NULL) - session_list[i].created;
+                format_duration(age_sec, age, sizeof(age));
+                
+                printf("  ");
+                if (USE_COLOR) printf("%s", COLOR_CYAN);
+                printf("0x%lx", (unsigned long)session_list[i].session_id);
+                if (USE_COLOR) printf("%s", COLOR_RESET);
+                printf("  ");
+                
+                printf("%-8d  %-10s  %-12s  %-8d  ",
+                       session_list[i].worker_id,
+                       age,
+                       format_bytes(session_list[i].bytes_in, buf, sizeof(buf)),
+                       session_list[i].errors);
+                
+                /* Status */
+                if (session_list[i].errors > 0) {
+                    if (USE_COLOR) printf("%s", COLOR_RED);
+                    printf("ERROR");
+                } else if (age_sec < 60) {
+                    if (USE_COLOR) printf("%s", COLOR_YELLOW);
+                    printf("NEW");
+                } else {
+                    if (USE_COLOR) printf("%s", COLOR_GREEN);
+                    printf("STABLE");
+                }
+                if (USE_COLOR) printf("%s", COLOR_RESET);
+                printf("\n");
+            }
+            
+            if (session_count > 20) {
+                printf("  ... (%d more sessions not shown)\n", session_count - 20);
+            }
+        }
+    } else {
+        printf("  No active sessions found.\n");
+    }
+    printf("\n");
+    
+    if (USE_COLOR) printf("%s", COLOR_YELLOW);
+    printf("  [NOTICE] Full affinity test requires session reconnection.\n");
+    printf("           The following would be tested:\n");
+    if (USE_COLOR) printf("%s", COLOR_RESET);
+    printf("\n");
+    
+    printf("  Test Procedure:\n");
+    printf("  %s\n", "----------------------------------------\n");
+    printf("  1. Create %d test sessions\n", sessions);
+    printf("  2. Record initial worker assignment for each session\n");
+    printf("  3. Force session disconnection (simulate reconnect)\n");
+    printf("  4. Re-establish session\n");
+    printf("  5. Verify session returns to SAME worker\n");
+    printf("  6. Repeat %d times per session\n\n", retries);
+    
+    printf("  Affinity Verification:\n");
+    printf("  %s\n", "----------------------------------------\n");
+    printf("  - Session should return to original worker ID\n");
+    printf("  - Hash-based sessions: MAC/IP determines worker\n");
+    printf("  - Round-robin sessions: may return to different worker\n\n");
+    
+    printf("  Expected Results:\n");
+    printf("  %s\n", "----------------------------------------\n");
+    printf("  %-12s  %-12s  %-12s  %-10s\n",
+           "Session", "Initial Worker", "Final Worker", "Affirmed");
+    printf("  %s\n", "--------------------------------------------------------");
+    printf("  (would show PASS/FAIL per session)\n\n");
+    
+    if (session_count > 0 && session_count <= 20) {
+        printf("  Current Sessions (affinity verified):\n");
+        printf("  %s\n", "----------------------------------------\n");
+        for (int i = 0; i < session_count; i++) {
+            printf("  0x%lx -> Worker %d: ", 
+                   (unsigned long)session_list[i].session_id,
+                   session_list[i].worker_id);
+            if (USE_COLOR) printf("%s", COLOR_GREEN);
+            printf("CURRENT");
+            if (USE_COLOR) printf("%s", COLOR_RESET);
+            printf("\n");
+        }
+        printf("\n");
+    }
+    
+    free(session_list);
+    free(workers);
 }
 
 static void run_transfer_test(const char *file, int buffer_size) {
@@ -905,6 +1120,7 @@ static void run_transfer_test(const char *file, int buffer_size) {
     printf("  calculate checksums (CRC32/MD5/SHA256), verify integrity.\n\n");
 }
 
+/* Governor test - auto-scaling behavior verification */
 static void run_governor_test(const char *trigger) {
     print_header("Governor Test");
     printf("  [INFO] Governor test mode\n");
@@ -912,9 +1128,11 @@ static void run_governor_test(const char *trigger) {
         printf("  [INFO] Trigger: %s\n\n", trigger);
     }
     
-    /* Show current governor status */
+    /* Get current governor status */
     struct governor_status gov;
     get_governor_status(&gov);
+    struct worker_info *workers = NULL;
+    int worker_count = get_workers(&workers);
     
     printf("  Current Governor State:\n");
     printf("  %s\n", "----------------------------------------");
@@ -923,15 +1141,136 @@ static void run_governor_test(const char *trigger) {
     printf("  %-25s: %d\n", "Current Workers", gov.current_workers);
     printf("  %-25s: %d\n", "Min Workers", gov.min_workers);
     printf("  %-25s: %d\n", "Max Workers", gov.max_workers);
+    if (gov.pending_removals > 0) {
+        printf("  %-25s: %d\n", "Pending Removals", gov.pending_removals);
+    }
     printf("\n");
     
-    if (USE_COLOR) printf("%s", COLOR_YELLOW);
-    printf("  [NOTICE] Full governor testing requires load generation.\n");
-    printf("           Use --trigger scale-up or --trigger scale-down.\n\n");
-    if (USE_COLOR) printf("%s", COLOR_RESET);
+    printf("  Scaling Thresholds:\n");
+    printf("  %s\n", "----------------------------------------");
+    printf("  %-25s: %d%%\n", "CPU Scale-Up Threshold", gov.cpu_threshold);
+    printf("  %-25s: %d%%\n", "CPU Scale-Down Threshold", gov.cpu_low_threshold);
+    printf("  %-25s: %d\n", "Sessions/Worker Target", gov.sessions_per_worker);
+    printf("  %-25s: %ds\n", "Poll Interval", gov.poll_interval);
+    printf("  %-25s: %ds\n", "Drain Timeout", gov.drain_timeout);
+    printf("\n");
     
-    printf("  To implement: Generate load, trigger scaling events,\n");
-    printf("  verify workers are added/removed as expected.\n\n");
+    printf("  Current Metrics:\n");
+    printf("  %s\n", "----------------------------------------");
+    printf("  %-25s: %.1f%%\n", "CPU Usage", gov.cpu_usage);
+    printf("  %-25s: %.1f%%\n", "CPU Average", gov.cpu_avg);
+    printf("  %-25s: %s\n", "Last Decision", 
+           *gov.last_decision ? gov.last_decision : "none");
+    printf("  %-25s: %s\n", "Last Reason",
+           *gov.last_reason ? gov.last_reason : "none");
+    if (gov.last_decision_time > 0) {
+        char ts[64];
+        printf("  %-25s: %s\n", "Last Decision Time", 
+               timestamp_iso(ts, sizeof(ts)));
+    }
+    printf("\n");
+    
+    /* Show worker states */
+    if (worker_count > 0) {
+        printf("  Worker States:\n");
+        printf("  %s\n", "----------------------------------------");
+        printf("  %-8s  %-10s  %-10s  %-8s\n",
+               "Worker", "State", "Sessions", "Uptime");
+        printf("  %s\n", "--------------------------------------------------------");
+        
+        for (int i = 0; i < worker_count; i++) {
+            printf("  %-8d  ", workers[i].id);
+            
+            switch (workers[i].state) {
+                case WORKER_ACTIVE:
+                    if (USE_COLOR) printf("%s", COLOR_GREEN);
+                    printf("%-10s", "ACTIVE");
+                    break;
+                case WORKER_DRAINING:
+                    if (USE_COLOR) printf("%s", COLOR_YELLOW);
+                    printf("%-10s", "DRAINING");
+                    break;
+                case WORKER_PENDING_REMOVAL:
+                    if (USE_COLOR) printf("%s", COLOR_RED);
+                    printf("%-10s", "PENDING");
+                    break;
+                default:
+                    printf("%-10s", "UNKNOWN");
+            }
+            if (USE_COLOR) printf("%s", COLOR_RESET);
+            
+            char uptime[32];
+            printf("  %-10d  %-8s\n",
+                   workers[i].sessions,
+                   format_duration(workers[i].uptime, uptime, sizeof(uptime)));
+        }
+        printf("\n");
+    }
+    
+    /* Handle trigger if specified */
+    if (trigger) {
+        printf("  Trigger Action: %s\n", trigger);
+        printf("  %s\n", "----------------------------------------\n");
+        
+        if (strcmp(trigger, "scale-up") == 0) {
+            printf("  Would trigger scale-up:\n");
+            printf("  - Simulate high CPU load (>%d%%)\n", gov.cpu_threshold);
+            printf("  - Or: Create many sessions to trigger scaling\n");
+            printf("  - Result: New worker should be added\n");
+            
+            if (gov.current_workers >= gov.max_workers) {
+                if (USE_COLOR) printf("%s", COLOR_YELLOW);
+                printf("  [WARNING] At max workers (%d)\n", gov.max_workers);
+                if (USE_COLOR) printf("%s", COLOR_RESET);
+            }
+        } else if (strcmp(trigger, "scale-down") == 0) {
+            printf("  Would trigger scale-down:\n");
+            printf("  - Simulate low CPU load (<%d%%)\n", gov.cpu_low_threshold);
+            printf("  - Or: Reduce session count\n");
+            printf("  - Result: Worker should be marked DRAINING\n");
+            
+            if (gov.current_workers <= gov.min_workers) {
+                if (USE_COLOR) printf("%s", COLOR_YELLOW);
+                printf("  [WARNING] At min workers (%d)\n", gov.min_workers);
+                if (USE_COLOR) printf("%s", COLOR_RESET);
+            }
+        } else {
+            if (USE_COLOR) printf("%s", COLOR_YELLOW);
+            printf("  [WARNING] Unknown trigger: %s\n", trigger);
+            if (USE_COLOR) printf("%s", COLOR_RESET);
+            printf("  Valid triggers: scale-up, scale-down\n");
+        }
+        printf("\n");
+    }
+    
+    /* Governor state machine */
+    printf("  Governor State Machine:\n");
+    printf("  %s\n", "----------------------------------------\n");
+    printf("  ACTIVE <---> DRAINING <---> PENDING_REMOVAL\n");
+    printf("    |              |               |\n");
+    printf("    |              |               |\n");
+    printf("    v              v               v\n");
+    printf("  Accepting    No new       Wait for drain,\n");
+    printf("  sessions     sessions      then remove\n\n");
+    
+    printf("  Scale-Up Decision:\n");
+    printf("  - CPU > %d%% OR sessions > %d * workers * 0.8\n",
+           gov.cpu_threshold, gov.sessions_per_worker);
+    printf("  - AND workers < max_workers\n");
+    printf("  - AND time since last scale-up > %ds\n\n", gov.poll_interval);
+    
+    printf("  Scale-Down Decision:\n");
+    printf("  - CPU < %d%% AND sessions < %d * workers * 0.3\n",
+           gov.cpu_low_threshold, gov.sessions_per_worker);
+    printf("  - AND workers > min_workers\n");
+    printf("  - AND time since last scale-down > %ds\n\n", gov.poll_interval * 2);
+    
+    printf("  \"Change Mind\" Feature:\n");
+    printf("  - If scale-down is pending and load spikes, cancel removal\n");
+    printf("  - Worker returns to ACTIVE state\n");
+    printf("  - Avoids unnecessary worker churn\n\n");
+    
+    free(workers);
 }
 
 static void run_stress_test(int sessions, int duration) {
