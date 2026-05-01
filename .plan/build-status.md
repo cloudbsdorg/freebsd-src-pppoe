@@ -77,11 +77,29 @@
 | 2.11 Add rc.conf variables | **COMPLETED** | 2026-04-23 | `rc.conf.5` (pppoed_loadbalancer, pppoed_workers, pppoed_algorithm, pppoed_governor_max) |
 | 2.12-2.14 Testing | NOT STARTED | | |
 
+### Phase 2.5: Governor Auto-Scaling Engine
+
+| Task | Status | Date | Files |
+|------|--------|------|-------|
+| 2.15 Governor polling thread | **COMPLETED** | 2026-05-01 | `libexec/pppoed/pppoed.c` |
+| 2.16 Worker hot-add | **COMPLETED** | 2026-05-01 | `libexec/pppoed/pppoed.c` |
+| 2.17 Worker graceful removal | **COMPLETED** | 2026-05-01 | `libexec/pppoed/pppoed.c` |
+| 2.18 "Change mind" logic | **COMPLETED** | 2026-05-01 | `libexec/pppoed/pppoed.c` |
+| 2.19 Session monitoring | **COMPLETED** | 2026-05-01 | `libexec/pppoed/pppoed.c` |
+| 2.20 rc.conf defaults | **COMPLETED** | 2026-05-01 | `libexec/pppoed/pppoed.c` |
+| 2.21 Signal handling | **COMPLETED** | 2026-05-01 | `libexec/pppoed/pppoed.c` |
+| 2.22 Scaling event logging | **COMPLETED** | 2026-05-01 | `libexec/pppoed/pppoed.c` |
+| 2.23 Scale-up/down delays | **COMPLETED** | 2026-05-01 | `libexec/pppoed/pppoed.c` |
+
 **Command Line Flags:**
 - `-L`: Enable load balancer mode (default: disabled, backward compatible)
 - `-w <n>`: Number of worker nodes (default: 1)
 - `-A <n>`: Algorithm (0=round-robin, 1=hash, 2=least-loaded)
 - `-G <n>`: Governor max workers (0=auto/mp_ncpus, >0=hard cap)
+- `-M <n>`: Governor min workers (default: 1)
+- `-I <n>`: Poll interval in seconds (default: 5)
+- `-c <n>`: CPU threshold for scale up (default: 80%)
+- `-C <n>`: CPU low threshold for scale down (default: 30%)
 
 ### Phase 3: Monitoring and Diagnostics
 

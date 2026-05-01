@@ -1,6 +1,6 @@
 PACKAGE=ppp
 PROG=	pppoed
-LIBADD=	netgraph
+LIBADD=	netgraph pthread
 MAN=	pppoed.8
 
 WARNS?=	1
