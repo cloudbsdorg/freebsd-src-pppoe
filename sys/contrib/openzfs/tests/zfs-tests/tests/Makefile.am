@@ -772,6 +772,9 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zfs_jail/cleanup.ksh \
 	functional/cli_root/zfs_jail/setup.ksh \
 	functional/cli_root/zfs_jail/zfs_jail_001_pos.ksh \
+	functional/cli_root/zfs_list/cleanup.ksh \
+	functional/cli_root/zfs_list/setup.ksh \
+	functional/cli_root/zfs_list/zfs_list_009_pos.ksh \
 	functional/cli_root/zfs_load-key/cleanup.ksh \
 	functional/cli_root/zfs_load-key/setup.ksh \
 	functional/cli_root/zfs_load-key/zfs_load-key_all.ksh \
@@ -1697,6 +1700,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/largest_pool/largest_pool_001_pos.ksh \
 	functional/libzfs/cleanup.ksh \
 	functional/libzfs/libzfs_input.ksh \
+	functional/libzfs/libzfs_mnttab_cache.ksh \
 	functional/libzfs/setup.ksh \
 	functional/limits/cleanup.ksh \
 	functional/limits/filesystem_count.ksh \
@@ -1884,6 +1888,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/raidz/raidz_expand_005_pos.ksh \
 	functional/raidz/raidz_expand_006_neg.ksh \
 	functional/raidz/raidz_expand_007_neg.ksh \
+	functional/raidz/raidz_zinject.ksh \
 	functional/raidz/setup.ksh \
 	functional/redacted_send/cleanup.ksh \
 	functional/redacted_send/redacted_compressed.ksh \
@@ -1894,6 +1899,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/redacted_send/redacted_holes.ksh \
 	functional/redacted_send/redacted_incrementals.ksh \
 	functional/redacted_send/redacted_largeblocks.ksh \
+	functional/redacted_send/redacted_max_blkid.ksh \
 	functional/redacted_send/redacted_many_clones.ksh \
 	functional/redacted_send/redacted_mixed_recsize.ksh \
 	functional/redacted_send/redacted_mounts.ksh \
