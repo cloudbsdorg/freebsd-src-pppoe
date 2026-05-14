@@ -2124,6 +2124,11 @@ int main(int argc, char **argv) {
     
     int c;
     int option_index = 0;
+
+    /* Initialize global state */
+    init_clients();
+    server_sock = -1;
+    config.server_port = 9001;
     
     /* Check for mode argument first */
     if (argc > 1) {
@@ -2393,11 +2398,11 @@ int main(int argc, char **argv) {
                     }
                     
                     free(worker_session_counts);
-                    free(sessions);
                     printf("\n");
                     printf("  Note: Full affinity verification requires tracking session\n");
                     printf("        creation history and comparing expected vs actual worker.\n\n");
                 }
+                free(sessions);
             }
             break;
             
@@ -2479,6 +2484,10 @@ typedef struct {
 static client_info_t clients[MAX_CLIENTS];
 static int server_sock = -1;
 static int server_port = 9001;
+
+static void init_clients(void) {
+    memset(clients, 0, sizeof(clients));
+}
 
 /* Send a JSON message over socket */
 static int send_message(int sock, const char *type, const char *payload) {

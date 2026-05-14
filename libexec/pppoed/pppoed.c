@@ -244,22 +244,18 @@ governor_update_state(void)
 
 /* Add a new worker via netgraph */
 static int
-governor_add_worker(int *new_worker_id)
+governor_add_worker(int worker_id)
 {
 	struct ngm_mkpeer mkp;
 	char worker_path[64];
-	int wid;
 
 	if (cs_fd < 0) {
 		syslog(LOG_ERR, "governor: no netgraph socket");
 		return (-1);
 	}
 
-	/* Determine next worker ID */
-	wid = governor_state.current_workers;
-
 	/* Create worker path */
-	snprintf(worker_path, sizeof(worker_path), "%s%d", NG_PPPOE_LB_HOOK_WORKER_BASE, wid);
+	snprintf(worker_path, sizeof(worker_path), "%s%d", NG_PPPOE_LB_HOOK_WORKER_BASE, worker_id);
 
 	/* Create worker peer node */
 	snprintf(mkp.type, sizeof(mkp.type), "%s", NG_PPPOE_NODE_TYPE);
@@ -268,12 +264,11 @@ governor_add_worker(int *new_worker_id)
 
 	if (NgSendMsg(cs_fd, lb_path, NGM_GENERIC_COOKIE,
 	    NGM_MKPEER, &mkp, sizeof(mkp)) < 0) {
-		syslog(LOG_ERR, "governor: failed to create worker %d: %m", wid);
+		syslog(LOG_ERR, "governor: failed to create worker %d: %m", worker_id);
 		return (-1);
 	}
 
-	*new_worker_id = wid;
-	syslog(LOG_INFO, "governor: created worker %d", wid);
+	syslog(LOG_INFO, "governor: created worker %d", worker_id);
 	return (0);
 }
 
@@ -342,7 +337,7 @@ governor_find_worker_to_remove(void)
 	/* Scan workers via sysctl for session counts */
 	for (i = 0; i < max_workers; i++) {
 		char name[64];
-		int state;
+		int state = 0;
 
 		snprintf(name, sizeof(name),
 		    "net.graph.pppoe_lb.workers.%d.state", i);
@@ -372,7 +367,7 @@ governor_find_draining_worker(void)
 
 	for (i = 0; i < max_workers; i++) {
 		char name[64];
-		int state;
+		int state = 0;
 
 		snprintf(name, sizeof(name),
 		    "net.graph.pppoe_lb.workers.%d.state", i);
@@ -463,7 +458,7 @@ governor_poll(void)
 
 	/* Execute scaling decisions */
 	if (should_scale_up) {
-		/* "Change mind" logic: cancel any pending drains */
+		/* "Change mind" logic: cancel any pending drains first */
 		draining_worker = governor_find_draining_worker();
 		if (draining_worker >= 0) {
 			pthread_mutex_lock(&governor_state.lock);
@@ -476,20 +471,21 @@ governor_poll(void)
 				    "governor: scale up (%s) - canceled drain for worker %d",
 				    reason_str[scale_reason], draining_worker);
 			}
-			return;
 		}
 
-		/* Add new worker */
+		/* Add new worker (even if we had a draining worker, cancel-drain
+		 * just makes it active again; we still need additional capacity) */
 		pthread_mutex_lock(&governor_state.lock);
 		governor_state.last_decision = 1;  /* scale_up */
 		governor_state.last_reason = scale_reason;
 		governor_state.last_scale_up = now;
+		int new_wid = governor_state.current_workers;
 		pthread_mutex_unlock(&governor_state.lock);
 
-		if (governor_add_worker(&draining_worker) == 0) {
+		if (governor_add_worker(new_wid) == 0) {
 			syslog(LOG_INFO,
 			    "governor: scale up (%s) - created worker %d",
-			    reason_str[scale_reason], draining_worker);
+			    reason_str[scale_reason], new_wid);
 		}
 	} else if (should_scale_down) {
 		/* Find worker to drain */
@@ -1496,5 +1492,6 @@ main(int argc, char *argv[])
     ret = -ReceivedSignal;
   }
 
+  close(ds);
   return ret;
 }

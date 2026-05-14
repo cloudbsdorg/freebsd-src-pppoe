@@ -530,8 +530,10 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 			if (max_entries > 1024)
 				max_entries = 1024;
 
-			map_resp = malloc(sizeof(*map_resp) + max_entries * sizeof(*map_resp->entries), M_NETGRAPH_PPPOE_LB, M_NOWAIT | M_ZERO);
-			if (map_resp == NULL) {
+			resp = malloc(sizeof(*resp) + sizeof(*map_resp) +
+			    max_entries * sizeof(struct ng_pppoe_lb_map_entry),
+			    M_NETGRAPH_PPPOE_LB, M_NOWAIT | M_ZERO);
+			if (resp == NULL) {
 				error = ENOMEM;
 				break;
 			}
@@ -540,7 +542,6 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 			map_resp = (struct ng_pppoe_lb_map *)resp->data;
 
 			mtx_lock(&priv->mtx);
-			count = 0;
 			LIST_FOREACH(entry, &priv->sess_list, next) {
 				if (count >= max_entries)
 					break;
@@ -550,8 +551,9 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 				count++;
 			}
 			map_resp->count = count;
-			resp->header.arglen = sizeof(*map_resp) + count * sizeof(struct ng_pppoe_lb_map_entry);
- 		mtx_unlock(&priv->mtx);
+			resp->header.arglen = sizeof(*map_resp) +
+			    count * sizeof(struct ng_pppoe_lb_map_entry);
+			mtx_unlock(&priv->mtx);
 			break;
 		}
 
@@ -641,29 +643,30 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 
 			mtx_lock(&priv->mtx);
 
-			/* Special case: -1 means return info for all workers */
-			if (req->worker_id == -1) {
-				/* Return first worker's info for now */
-				req->worker_id = 0;
-			}
+			/*
+			 * Special case: -1 means return info for first worker.
+			 * Use a temporary variable to avoid modifying req->worker_id
+			 * before validation.
+			 */
+			int wid = (req->worker_id == -1) ? 0 : req->worker_id;
 
 			/* Validate worker ID */
-			if (req->worker_id < 0 || req->worker_id >= priv->num_workers) {
+			if (wid < 0 || wid >= priv->num_workers) {
 				mtx_unlock(&priv->mtx);
 				free(resp, M_NETGRAPH);
 				error = ENOENT;
 				break;
 			}
 
-			info->worker_id = req->worker_id;
-			info->state = priv->workers[req->worker_id].state;
-			info->sessions = priv->workers[req->worker_id].sessions;
-			info->last_activity = priv->workers[req->worker_id].last_activity;
-			info->uptime = time_uptime - priv->workers[req->worker_id].start_time;
-			info->packets_in = priv->workers[req->worker_id].packets_in;
-			info->packets_out = priv->workers[req->worker_id].packets_out;
-			info->bytes_in = priv->workers[req->worker_id].bytes_in;
-			info->bytes_out = priv->workers[req->worker_id].bytes_out;
+			info->worker_id = wid;
+			info->state = priv->workers[wid].state;
+			info->sessions = priv->workers[wid].sessions;
+			info->last_activity = priv->workers[wid].last_activity;
+			info->uptime = time_uptime - priv->workers[wid].start_time;
+			info->packets_in = priv->workers[wid].packets_in;
+			info->packets_out = priv->workers[wid].packets_out;
+			info->bytes_in = priv->workers[wid].bytes_in;
+			info->bytes_out = priv->workers[wid].bytes_out;
 
 			mtx_unlock(&priv->mtx);
 			break;
@@ -861,7 +864,7 @@ ng_pppoe_lb_rcvdata(hook_p hook, item_p item)
 		return (EPFNOSUPPORT);
 	}
 
-	if (worker_idx < 0 || worker_idx >= priv->num_workers_active) {
+	if (worker_idx < 0 || worker_idx >= priv->num_workers) {
 		mtx_unlock(&priv->mtx);
 		NG_FREE_M(m);
 		NG_FREE_ITEM(item);
@@ -900,11 +903,42 @@ ng_pppoe_lb_disconnect(hook_p hook)
 	}
 
 	if (idx >= 0) {
+		struct ng_pppoe_lb_sess_entry *sess_entry, *sess_tmp;
+		int worker_state = priv->workers[idx].state;
+
+		/*
+		 * Clean up sessions mapped to this worker before removal.
+		 * We must remove sessions that were mapped to idx, since
+		 * after the shift they'll have stale indices.
+		 */
+		LIST_FOREACH_SAFE(sess_entry, &priv->sess_list, next, sess_tmp) {
+			if (sess_entry->worker_index == idx) {
+				LIST_REMOVE(sess_entry, next);
+				free(sess_entry, M_NETGRAPH);
+				priv->sess_count--;
+				priv->sessions_destroyed++;
+			} else if (sess_entry->worker_index > idx) {
+				/*
+				 * Adjust indices for sessions that will be
+				 * shifted left after worker removal.
+				 */
+				sess_entry->worker_index--;
+			}
+		}
+
 		/* Shift remaining hooks */
 		for (i = idx; i < priv->num_workers - 1; i++)
 			priv->worker_hooks[i] = priv->worker_hooks[i + 1];
+
+		/* Shift remaining workers to match */
+		for (i = idx; i < priv->num_workers - 1; i++)
+			priv->workers[i] = priv->workers[i + 1];
+
 		priv->num_workers--;
-		priv->num_workers_active--;
+		if (worker_state == NG_PPPOE_LB_WORKER_ACTIVE)
+			priv->num_workers_active--;
+		else if (worker_state == NG_PPPOE_LB_WORKER_DRAINING)
+			priv->num_workers_draining--;
 	}
 	mtx_unlock(&priv->mtx);
 
@@ -1000,7 +1034,6 @@ ng_pppoe_lb_select_worker_session(struct ng_pppoe_lb_private *priv, uint16_t ses
 
 	/* Add to session map */
 	ng_pppoe_lb_add_session(priv, session_id, idx);
-	priv->workers[idx].sessions++;
 
 	return (idx);
 }
