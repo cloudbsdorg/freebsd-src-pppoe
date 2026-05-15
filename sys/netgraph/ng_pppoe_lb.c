@@ -395,6 +395,8 @@ static struct ng_type ng_pppoe_lb_typestruct = {
 
 NETGRAPH_INIT(pppoe_lb, &ng_pppoe_lb_typestruct);
 
+static char ng_pppoe_lb_version[] = "ng_pppoe_lb v2 - pppoe- hook support";
+
 /* Node constructor */
 static int
 ng_pppoe_lb_constructor(node_p node)
@@ -402,6 +404,7 @@ ng_pppoe_lb_constructor(node_p node)
 	struct ng_pppoe_lb_private *priv;
 	int max_workers_alloc;
 
+	printf("%s: loaded\\n", ng_pppoe_lb_version);
 	priv = malloc(sizeof(*priv), M_NETGRAPH, M_NOWAIT | M_ZERO);
 	if (priv == NULL)
 		return (ENOMEM);
@@ -711,6 +714,17 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 		}
 		break;
 
+	case NGM_PPPOE_COOKIE:
+		switch (msg->header.cmd) {
+		case NGM_PPPOE_LISTEN:
+			/* LISTEN - just acknowledge, session handling is via workers */
+			break;
+		default:
+			error = EINVAL;
+			break;
+		}
+		break;
+
 	default:
 		error = EINVAL;
 		break;
@@ -777,9 +791,10 @@ ng_pppoe_lb_newhook(node_p node, hook_p hook, const char *name)
 			return (EEXIST);
 		priv->ether_hook = hook;
 		NG_HOOK_SET_PRIVATE(hook, priv);
+	} else if (strncmp(name, "pppoe-", 6) == 0) {
+		NG_HOOK_SET_PRIVATE(hook, priv);
 	} else if (strncmp(name, NG_PPPOE_LB_HOOK_WORKER_BASE,
 	    strlen(NG_PPPOE_LB_HOOK_WORKER_BASE)) == 0) {
-		/* Worker hook - will be connected later */
 		NG_HOOK_SET_PRIVATE(hook, priv);
 	} else {
 		return (EINVAL);
@@ -806,6 +821,12 @@ ng_pppoe_lb_connect(hook_p hook)
 
 	if (hook == priv->ether_hook) {
 		/* Ethernet hook connected */
+		return (0);
+	}
+
+	/* Check for PPPoE control hook from socket */
+	if (strncmp(NG_HOOK_NAME(hook), "pppoe-", 6) == 0) {
+		/* Control hook - just acknowledge, don't add to workers */
 		return (0);
 	}
 
