@@ -888,6 +888,8 @@ ng_pppoe_lb_disconnect(hook_p hook)
 	int i, idx;
 
 	priv = GET_PRIV(hook);
+	if (priv == NULL)
+		return (EINVAL);
 
 	if (hook == priv->ether_hook) {
 		priv->ether_hook = NULL;
