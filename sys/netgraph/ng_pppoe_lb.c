@@ -776,9 +776,11 @@ ng_pppoe_lb_newhook(node_p node, hook_p hook, const char *name)
 		if (priv->ether_hook != NULL)
 			return (EEXIST);
 		priv->ether_hook = hook;
+		NG_HOOK_SET_PRIVATE(hook, priv);
 	} else if (strncmp(name, NG_PPPOE_LB_HOOK_WORKER_BASE,
 	    strlen(NG_PPPOE_LB_HOOK_WORKER_BASE)) == 0) {
 		/* Worker hook - will be connected later */
+		NG_HOOK_SET_PRIVATE(hook, priv);
 	} else {
 		return (EINVAL);
 	}
@@ -791,14 +793,16 @@ static int
 ng_pppoe_lb_connect(hook_p hook)
 {
 	struct ng_pppoe_lb_private *priv;
-	node_p node;
 	hook_p *new_hooks;
 	int new_size;
 
-	node = NG_HOOK_NODE(hook);
-	priv = GET_NODE_PRIV(node);
-	if (priv == NULL)
+	printf("ng_pppoe_lb_connect: hook=%p\n", hook);
+	priv = GET_PRIV(hook);
+	printf("ng_pppoe_lb_connect: priv=%p\n", priv);
+	if (priv == NULL) {
+		printf("ng_pppoe_lb_connect: priv is NULL, returning EINVAL\n");
 		return (EINVAL);
+	}
 
 	if (hook == priv->ether_hook) {
 		/* Ethernet hook connected */
