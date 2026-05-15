@@ -306,6 +306,7 @@ static int get_sessions(struct session_info **sessions_out, int max_sessions) {
 /* Forward declarations for session tracking */
 static void track_session(uint64_t session_id, int worker_id);
 static int get_drift_count(void);
+static void init_clients(void);
 
 /* Get worker information */
 static int get_workers(struct worker_info **workers_out) {
@@ -1406,7 +1407,7 @@ static void run_transfer_test(const char *file, int buffer_size) {
     printf("  Block    Status    CRC32       Time\n");
     printf("  %s\n", "--------------------------------------------------------");
     
-    uint32_t total_crc = 0;
+    uint32_t total_crc __unused = 0;
     int passed = 0;
     int failed = 0;
     
@@ -1692,7 +1693,7 @@ static void run_stress_test(int sessions, int duration) {
         int create_rate = (sessions / 10) + (rand() % (sessions / 5));
         int destroy_rate = (active_sessions > 10) ? (rand() % (active_sessions / 10)) : 0;
         
-        int created = 0, destroyed = 0;
+        int created __unused = 0, destroyed __unused = 0;
         
         for (int i = 0; i < create_rate && active_sessions < sessions; i++) {
             if (rand() % 100 < 95) {  /* 95% success rate */
@@ -1830,7 +1831,7 @@ static void run_benchmark_test(void) {
     
     init_crc32();
     uint8_t buffer[65536];
-    for (int i = 0; i < sizeof(buffer); i++) {
+    for (int i = 0; i < (int)sizeof(buffer); i++) {
         buffer[i] = rand() % 256;
     }
     
@@ -2127,8 +2128,6 @@ int main(int argc, char **argv) {
 
     /* Initialize global state */
     init_clients();
-    server_sock = -1;
-    config.server_port = 9001;
     
     /* Check for mode argument first */
     if (argc > 1) {
@@ -2483,7 +2482,6 @@ typedef struct {
 #define MAX_CLIENTS 16
 static client_info_t clients[MAX_CLIENTS];
 static int server_sock = -1;
-static int server_port = 9001;
 
 static void init_clients(void) {
     memset(clients, 0, sizeof(clients));
