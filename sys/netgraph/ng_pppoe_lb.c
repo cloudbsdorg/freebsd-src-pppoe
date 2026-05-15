@@ -795,6 +795,8 @@ ng_pppoe_lb_connect(hook_p hook)
 	int new_size;
 
 	priv = GET_PRIV(hook);
+	if (priv == NULL)
+		return (EINVAL);
 
 	if (hook == priv->ether_hook) {
 		/* Ethernet hook connected */
