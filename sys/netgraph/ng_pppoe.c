@@ -749,6 +749,7 @@ ng_pppoe_connect(hook_p hook)
 	if (hook != privp->ethernet_hook)
 		return (0);
 
+	printf("ng_pppoe_connect: requesting MAC from ether node\n");
 	/*
 	 * If this is Ethernet hook, then request MAC address
 	 * from our downstream.
@@ -761,9 +762,12 @@ ng_pppoe_connect(hook_p hook)
 	 * Our hook and peer hook have HK_INVALID flag set,
 	 * so we can't use NG_SEND_MSG_HOOK() macro here.
 	 */
+	printf("ng_pppoe_connect: sending to peer %u\n",
+	    NG_NODE_ID(NG_PEER_NODE(privp->ethernet_hook)));
 	NG_SEND_MSG_ID(error, privp->node, msg,
 	    NG_NODE_ID(NG_PEER_NODE(privp->ethernet_hook)),
 	    NG_NODE_ID(privp->node));
+	printf("ng_pppoe_connect: result=%d\n", error);
 
 	return (error);
 }
