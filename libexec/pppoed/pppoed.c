@@ -748,14 +748,14 @@ ConfigureNode(const char *prog, const char *iface, const char *provider,
     /* Create worker nodes */
     for (i = 0; i < num_workers; i++) {
       lbpath = (char *)alloca(strlen(iface) + 32);
-      sprintf(lbpath, "%s%s:", epath, NG_ETHER_HOOK_ORPHAN);
+      sprintf(lbpath, "%s%s", epath, NG_ETHER_HOOK_ORPHAN);
 
       snprintf(mkp.type, sizeof mkp.type, "%s", NG_PPPOE_NODE_TYPE);
       snprintf(mkp.ourhook, sizeof mkp.ourhook, "%s%d", NG_PPPOE_LB_HOOK_WORKER_BASE, i);
       snprintf(mkp.peerhook, sizeof mkp.peerhook, "%s", NG_PPPOE_HOOK_ETHERNET);
 
       if (debug)
-        fprintf(stderr, "Send MKPEER: %s%s -> [type %s]:%s\n", lbpath,
+        fprintf(stderr, "Send MKPEER: %s:%s -> [type %s]:%s\n", lbpath,
                 mkp.ourhook, mkp.type, mkp.peerhook);
 
       if (NgSendMsg(cs, lbpath, NGM_GENERIC_COOKIE,
@@ -768,7 +768,7 @@ ConfigureNode(const char *prog, const char *iface, const char *provider,
 
     /* Configure load balancer */
     lbpath = (char *)alloca(strlen(iface) + 32);
-    sprintf(lbpath, "%s%s:", epath, NG_ETHER_HOOK_ORPHAN);
+    sprintf(lbpath, "%s%s", epath, NG_ETHER_HOOK_ORPHAN);
 
     cfg.algorithm = algorithm;
     cfg.max_workers = max_workers;
@@ -1366,7 +1366,7 @@ main(int argc, char *argv[])
 
   /* Build load balancer path for governor */
   if (optL) {
-    snprintf(lbpath, sizeof(lbpath), "%s%s:", argv[optind], NG_ETHER_HOOK_ORPHAN);
+    snprintf(lbpath, sizeof(lbpath), "%s%s", argv[optind], NG_ETHER_HOOK_ORPHAN);
   }
 
   if (!optF && daemon(1, 0) == -1) {
