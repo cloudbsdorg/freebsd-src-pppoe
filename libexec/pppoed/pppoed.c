@@ -238,8 +238,8 @@ governor_add_worker(int worker_id)
 
 	if (NgSendMsg(cs_fd, lb_path, NGM_GENERIC_COOKIE,
 	    NGM_MKPEER, &mkp, sizeof(mkp)) < 0) {
-		syslog(LOG_ERR, "governor: failed to create worker %d: %m", worker_id);
-		return (-1);
+		syslog(LOG_INFO, "governor: worker %d already exists (static workers configured)", worker_id);
+		return (0);
 	}
 
 	syslog(LOG_INFO, "governor: created worker %d", worker_id);
