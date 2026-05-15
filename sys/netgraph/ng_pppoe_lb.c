@@ -794,9 +794,13 @@ ng_pppoe_lb_connect(hook_p hook)
 	hook_p *new_hooks;
 	int new_size;
 
+	printf("ng_pppoe_lb_connect: hook=%p\n", hook);
 	priv = GET_PRIV(hook);
-	if (priv == NULL)
+	printf("ng_pppoe_lb_connect: priv=%p\n", priv);
+	if (priv == NULL) {
+		printf("ng_pppoe_lb_connect: priv is NULL, returning EINVAL\n");
 		return (EINVAL);
+	}
 
 	if (hook == priv->ether_hook) {
 		/* Ethernet hook connected */
