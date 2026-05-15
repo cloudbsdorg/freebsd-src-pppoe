@@ -4,5 +4,6 @@
 PROG=	pppoetest
 SRCS=	pppoetest.c
 MAN8=	pppoetest.8
+LIBADD=	pthread
 
 .include <bsd.prog.mk>

@@ -70,32 +70,6 @@
 
 
 #define	DEFAULT_EXEC_PREFIX	"exec /usr/sbin/ppp -direct "
-
-/*
- * Local definitions for pppoe_lb structures (userland copy of kernel headers)
- * These mirror the kernel definitions in sys/netgraph/ng_pppoe_lb.h
- */
-
-/* Worker states */
-#define NG_PPPOE_LB_WORKER_ACTIVE		0
-#define NG_PPPOE_LB_WORKER_DRAINING		1
-#define NG_PPPOE_LB_WORKER_PENDING_REMOVAL	2
-
-/* Control message cookie */
-#define NGM_PPPOE_LB_COOKIE	1089893073
-
-/* Set worker state message */
-struct ng_pppoe_lb_set_worker_state {
-	int32_t		worker_id;		/* Worker index */
-	uint32_t	state;			/* New state */
-};
-
-/* Control messages */
-enum {
-	NGM_PPPOE_LB_SET_WORKER_STATE = 6,	/* Set individual worker state */
-};
-
-#define	HISMACADDR		"HISMACADDR"
 #define	SESSION_ID		"SESSION_ID"
 
 static void nglogx(const char *, ...) __printflike(1, 2);
