@@ -142,14 +142,26 @@ test_result() {
     local expected="$2"
     local actual="$3"
     local details="$4"
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
+
     if [ "$status" = "PASS" ]; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - $expected"
         log_pass "Test $TESTS_RUN: $expected"
         if [ "$VERBOSE" = "true" ] && [ -n "$actual" ]; then
             echo "    Expected: $expected"
             echo "    Actual:   $actual"
         fi
+    elif [ "$status" = "SKIP" ]; then
+        TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+        echo "ok $TESTS_RUN - $expected # skip"
+        if [ "$VERBOSE" = "true" ]; then
+            log_skip "Test $TESTS_RUN: $expected"
+        fi
     else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - $expected"
         log_fail "Test $TESTS_RUN: $expected"
         echo "    Expected: $expected"
         echo "    Actual:   $actual"

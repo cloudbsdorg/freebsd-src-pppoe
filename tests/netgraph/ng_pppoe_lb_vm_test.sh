@@ -678,118 +678,149 @@ main() {
     TESTS_RUN=0
     TESTS_PASSED=0
     TESTS_FAILED=0
-    
-    # Run tests
+
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_module_lifecycle; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_module_lifecycle"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_module_lifecycle"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_topology_creation; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_topology_creation"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_topology_creation"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_sysctl_config; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_sysctl_config"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_sysctl_config"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_config; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_governor_config"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_governor_config"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_status; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_governor_status"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_governor_status"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_worker_sysctls; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_worker_sysctls"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_worker_sysctls"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_ngctl_commands; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_ngctl_commands"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_ngctl_commands"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_algorithm_selection; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_algorithm_selection"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_algorithm_selection"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_worker_state_management; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_worker_state_management"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_worker_state_management"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_thresholds; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_governor_thresholds"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_governor_thresholds"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_mode_switching; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_governor_mode_switching"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_governor_mode_switching"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_debug_level; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_debug_level"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_debug_level"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_scaling_decision; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_governor_scaling_decision"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_governor_scaling_decision"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_per_worker_metrics; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_per_worker_metrics"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_per_worker_metrics"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_intervals; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_governor_intervals"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_governor_intervals"
     fi
 
     TESTS_RUN=$((TESTS_RUN + 1))
     if test_memory_leak; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "ok $TESTS_RUN - test_memory_leak"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "not ok $TESTS_RUN - test_memory_leak"
     fi
 
     echo "1..${TESTS_RUN}"

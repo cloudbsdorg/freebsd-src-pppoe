@@ -167,7 +167,6 @@ wait_for_sessions() {
 
 # Test 1: Rapid session creation
 test_rapid_session_creation() {
-    TESTS_RUN=$((TESTS_RUN + 1))
     log_section "Test 1: Rapid Session Creation"
     
     local start_time=$(date +%s)
@@ -510,29 +509,109 @@ main() {
     # Load modules
     load_modules || exit 1
     
-    # Run tests based on mode
+    # Run tests based on mode and output TAP
     case "$MODE" in
         churn)
-            test_rapid_session_creation
-            test_session_churn
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_rapid_session_creation; then
+                echo "ok $TESTS_RUN - rapid_session_creation"
+            else
+                echo "not ok $TESTS_RUN - rapid_session_creation"
+            fi
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_session_churn; then
+                echo "ok $TESTS_RUN - session_churn"
+            else
+                echo "not ok $TESTS_RUN - session_churn"
+            fi
             ;;
         load)
-            test_concurrent_load
-            test_cpu_spike
-            test_worker_scaling
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_concurrent_load; then
+                echo "ok $TESTS_RUN - concurrent_load"
+            else
+                echo "not ok $TESTS_RUN - concurrent_load"
+            fi
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_cpu_spike; then
+                echo "ok $TESTS_RUN - cpu_spike"
+            else
+                echo "not ok $TESTS_RUN - cpu_spike"
+            fi
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_worker_scaling; then
+                echo "ok $TESTS_RUN - worker_scaling"
+            else
+                echo "not ok $TESTS_RUN - worker_scaling"
+            fi
             ;;
         stability)
-            test_memory_stress
-            test_long_running
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_memory_stress; then
+                echo "ok $TESTS_RUN - memory_stress"
+            else
+                echo "not ok $TESTS_RUN - memory_stress"
+            fi
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_long_running; then
+                echo "ok $TESTS_RUN - long_running"
+            else
+                echo "not ok $TESTS_RUN - long_running"
+            fi
             ;;
         all)
-            test_rapid_session_creation
-            test_session_churn
-            test_concurrent_load
-            test_cpu_spike
-            test_worker_scaling
-            test_memory_stress
-            test_long_running
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_rapid_session_creation; then
+                echo "ok $TESTS_RUN - rapid_session_creation"
+            else
+                echo "not ok $TESTS_RUN - rapid_session_creation"
+            fi
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_session_churn; then
+                echo "ok $TESTS_RUN - session_churn"
+            else
+                echo "not ok $TESTS_RUN - session_churn"
+            fi
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_concurrent_load; then
+                echo "ok $TESTS_RUN - concurrent_load"
+            else
+                echo "not ok $TESTS_RUN - concurrent_load"
+            fi
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_cpu_spike; then
+                echo "ok $TESTS_RUN - cpu_spike"
+            else
+                echo "not ok $TESTS_RUN - cpu_spike"
+            fi
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_worker_scaling; then
+                echo "ok $TESTS_RUN - worker_scaling"
+            else
+                echo "not ok $TESTS_RUN - worker_scaling"
+            fi
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_memory_stress; then
+                echo "ok $TESTS_RUN - memory_stress"
+            else
+                echo "not ok $TESTS_RUN - memory_stress"
+            fi
+
+            TESTS_RUN=$((TESTS_RUN + 1))
+            if test_long_running; then
+                echo "ok $TESTS_RUN - long_running"
+            else
+                echo "not ok $TESTS_RUN - long_running"
+            fi
             ;;
         *)
             log_error "Unknown mode: $MODE"
