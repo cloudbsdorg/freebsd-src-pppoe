@@ -197,7 +197,7 @@ test_governor_config() {
     # Test new governor sysctls
     sysctl net.graph.pppoe_lb.governor.mode=1
     sysctl net.graph.pppoe_lb.governor.min_workers=2
-    sysctl net.graph.pppoe_lb.governor.poll_interval=10
+    sysctl net.graph.pppoe_lb.governor.scale_up_interval=10
     sysctl net.graph.pppoe_lb.governor.sessions_per_worker=100
     sysctl net.graph.pppoe_lb.governor.drain_timeout=60
     
@@ -217,10 +217,10 @@ test_governor_config() {
         return 1
     fi
     
-    # Verify poll_interval
-    INTERVAL=$(sysctl -n net.graph.pppoe_lb.governor.poll_interval)
+    # Verify scale_up_interval
+    INTERVAL=$(sysctl -n net.graph.pppoe_lb.governor.scale_up_interval)
     if [ "$INTERVAL" != "10" ]; then
-        log_error "Governor poll_interval not set correctly"
+        log_error "Governor scale_up_interval not set correctly"
         unload_modules
         return 1
     fi

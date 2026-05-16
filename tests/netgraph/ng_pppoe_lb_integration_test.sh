@@ -540,10 +540,10 @@ test_governor_scaling() {
     
     # Test INT-12: Governor poll interval
     test_header "Governor poll interval configuration"
-    sysctl_set "governor.poll_interval" 3
+    sysctl_set "governor.scale_up_interval" 3
     sleep 0.2
     local interval
-    interval=$(sysctl_get "governor.poll_interval")
+    interval=$(sysctl_get "governor.scale_up_interval")
     if [ "$interval" = "3" ]; then
         test_result "PASS" "Poll interval configured" "interval=${interval}s"
     else
@@ -687,7 +687,7 @@ test_sysctl_interface() {
     # Test INT-19: Governor configuration sysctls
     test_header "Governor configuration sysctls"
     local gov_missing=""
-    local gov_sysctls="governor.enabled governor.mode governor.min_workers governor.max_workers governor.cpu_threshold governor.cpu_low_threshold governor.poll_interval governor.drain_timeout governor.sessions_per_worker"
+    local gov_sysctls="governor.enabled governor.mode governor.min_workers governor.max_workers governor.cpu_threshold governor.cpu_low_threshold governor.scale_up_interval governor.scale_down_interval governor.drain_timeout governor.sessions_per_worker"
     
     for sysctl in $gov_sysctls; do
         local val
