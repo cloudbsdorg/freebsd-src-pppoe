@@ -1,0 +1,95 @@
+--
+-- SPDX-License-Identifier: BSD-2-Clause
+--
+-- Copyright (c) 2025 CloudBSD Inc.
+-- All rights reserved.
+--
+-- Redistribution and use in source and binary forms, with or without
+-- modification, are permitted provided that the following conditions
+-- are met:
+-- 1. Redistributions of source code must retain the above copyright
+--    notice, this list of conditions and the following disclaimer.
+-- 2. Redistributions in binary form must reproduce the above copyright
+--    notice, this list of conditions and the following disclaimer in the
+--    documentation and/or other materials provided with the distribution.
+--
+-- THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+-- ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+-- IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+-- ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+-- FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+-- DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+-- OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+-- HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+-- LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+-- OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+-- SUCH DAMAGE.
+
+-- Kyuafile for PPPoE Load Balancer Tests
+--
+-- These tests are shell-based and output TAP (Test Anything Protocol) format.
+-- Each test script must output TAP plan (e.g., "1..5") and results (e.g., "ok 1 - test name")
+-- for proper kyua integration.
+--
+-- Usage:
+--   kyua test [-v]              Run all tests
+--   kyua test -t unit           Run unit tests only
+--   kyua test -t regression    Run regression tests only
+
+syntax(2)
+
+test_suite("PPPoE Load Balancer")
+
+-- Unit tests
+tap_test_program{
+    name = "ng_pppoe_lb_unit_test",
+    description = "Unit tests for ng_pppoe_lb kernel module",
+    is_exclusive = true,
+    required_user = "root",
+    timeout = 300,
+}
+
+-- Configuration tests
+tap_test_program{
+    name = "ng_pppoe_lb_config_test",
+    description = "Configuration and sysctl interface tests",
+    is_exclusive = true,
+    required_user = "root",
+    timeout = 180,
+}
+
+-- Regression tests
+tap_test_program{
+    name = "ng_pppoe_lb_regression_test",
+    description = "Regression tests for bug fixes",
+    is_exclusive = true,
+    required_user = "root",
+    timeout = 300,
+}
+
+-- Integration tests
+tap_test_program{
+    name = "ng_pppoe_lb_integration_test",
+    description = "Full system integration tests",
+    is_exclusive = true,
+    required_user = "root",
+    timeout = 600,
+}
+
+-- Stress tests
+tap_test_program{
+    name = "ng_pppoe_lb_stress_test",
+    description = "Stress and performance tests",
+    is_exclusive = true,
+    required_user = "root",
+    timeout = 900,
+}
+
+-- VM environment tests
+tap_test_program{
+    name = "ng_pppoe_lb_vm_test",
+    description = "VM environment tests",
+    is_exclusive = true,
+    required_user = "root",
+    timeout = 300,
+}
