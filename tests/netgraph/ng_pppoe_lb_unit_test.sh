@@ -117,16 +117,18 @@ log_verbose() {
     fi
 }
 
-# Record test result
+# Record test result (TAP + colored output)
 record_pass() {
     TESTS_RUN=$((TESTS_RUN + 1))
     TESTS_PASSED=$((TESTS_PASSED + 1))
+    echo "ok $TESTS_RUN - $1"
     log_success "Test $TESTS_RUN: $1"
 }
 
 record_fail() {
     TESTS_RUN=$((TESTS_RUN + 1))
     TESTS_FAILED=$((TESTS_FAILED + 1))
+    echo "not ok $TESTS_RUN - $1"
     log_fail "Test $TESTS_RUN: $1"
     if [ "$STOP_ON_FAIL" = "1" ]; then
         log_error "Stopping on first failure"
@@ -138,6 +140,7 @@ record_fail() {
 record_skip() {
     TESTS_RUN=$((TESTS_RUN + 1))
     TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+    echo "ok $TESTS_RUN - $1 # skip"
     log_skip "Test $TESTS_RUN: $1 (skipped)"
 }
 
@@ -924,6 +927,7 @@ test_ngctl_commands() {
 # ============================================================================
 
 run_all_tests() {
+    echo "1..25"
     log_section "Running PPPoE Load Balancer Unit Tests"
     log_info "Test mode: $([ "$QUICK_MODE" = "1" ] && echo "Quick" || echo "Full")"
     log_info "Verbose: $([ "$VERBOSE" = "1" ] && echo "Yes" || echo "No")"
