@@ -145,67 +145,67 @@ static int PppoeLbTriggerScaleCmd(int ac, char **av);
 
 const struct ngcmd pppoe_lb_show_cmd = {
 	PppoeLbShowCmd,
-	"pppoe_lb show <path>",
+	"lb_show <path>",
 	"Show PPPoE load balancer information",
 	"Displays statistics, worker count, algorithm, and session map for the specified pppoe_lb node.",
-	{ "pppoe_lb info" }
+	{ NULL }
 };
 
 const struct ngcmd pppoe_lb_config_cmd = {
 	PppoeLbConfigCmd,
-	"pppoe_lb config <path> [algorithm <0|1|2>] [max_workers <n>] [debug <level>]",
+	"lb_config <path> [algorithm <0|1|2>] [max_workers <n>] [debug <level>]",
 	"Configure PPPoE load balancer",
 	"Sets the load balancing algorithm (0=round-robin, 1=hash, 2=least-loaded),\n"
 	"maximum workers for governor, and debug level.",
-	{ "pppoe_lb set" }
+	{ NULL }
 };
 
 const struct ngcmd pppoe_lb_stats_cmd = {
 	PppoeLbStatsCmd,
-	"pppoe_lb stats <path>",
+	"lb_stats <path>",
 	"Show PPPoE load balancer statistics",
 	"Displays packet counts, session counts, and worker statistics.",
-	{ "pppoe_lb statistics" }
+	{ NULL }
 };
 
 const struct ngcmd pppoe_lb_map_cmd = {
 	PppoeLbMapCmd,
-	"pppoe_lb map <path>",
+	"lb_map <path>",
 	"Show PPPoE session-to-worker mapping",
 	"Displays the current session ID to worker node assignments.",
-	{ "pppoe_lb sessions" }
+	{ NULL }
 };
 
 const struct ngcmd pppoe_lb_workers_cmd = {
 	PppoeLbWorkersCmd,
-	"pppoe_lb workers <path>",
+	"lb_workers <path>",
 	"Show all workers and their states",
 	"Displays detailed information for all workers including state, sessions, and uptime.",
-	{ "pppoe_lb showworkers" }
+	{ NULL }
 };
 
 const struct ngcmd pppoe_lb_worker_cmd = {
 	PppoeLbWorkerCmd,
-	"pppoe_lb worker <path> <id> [state <0|1|2>]",
+	"lb_worker <path> <id> [state <0|1|2>]",
 	"Get or set worker state",
 	"Get worker info or set worker state: 0=ACTIVE, 1=DRAINING, 2=PENDING_REMOVAL.",
-	{ "pppoe_lb wstate" }
+	{ NULL }
 };
 
 const struct ngcmd pppoe_lb_governor_cmd = {
 	PppoeLbGovernorCmd,
-	"pppoe_lb governor <path> [enable|disable]",
-	"Enable or disable the CPU governor",
-	"Enable or disable automatic worker scaling based on CPU load.",
-	{ "pppoe_lb gov" }
+	"lb_governor <path>",
+	"Show PPPoE governor status",
+	"Displays governor configuration and current state.",
+	{ NULL }
 };
 
 const struct ngcmd pppoe_lb_trigger_scale_cmd = {
 	PppoeLbTriggerScaleCmd,
-	"pppoe_lb trigger <path> [up|down]",
+	"lb_trigger <path> [up|down]",
 	"Trigger a scale event for testing",
 	"Forces a scale up or scale down decision (for testing governor logic).",
-	{ "pppoe_lb scale" }
+	{ NULL }
 };
 
 static int
