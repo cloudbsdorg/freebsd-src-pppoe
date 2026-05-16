@@ -42,7 +42,7 @@ test_suite("PPPoE Load Balancer")
 
 -- Unit tests
 tap_test_program{
-    name = "ng_pppoe_lb_unit_test",
+    name = "ng_pppoe_lb_unit_test.sh",
     description = "Unit tests for ng_pppoe_lb kernel module",
     is_exclusive = true,
     required_user = "root",
@@ -51,7 +51,7 @@ tap_test_program{
 
 -- Configuration tests
 tap_test_program{
-    name = "ng_pppoe_lb_config_test",
+    name = "ng_pppoe_lb_config_test.sh",
     description = "Configuration and sysctl interface tests",
     is_exclusive = true,
     required_user = "root",
@@ -60,7 +60,7 @@ tap_test_program{
 
 -- Regression tests
 tap_test_program{
-    name = "ng_pppoe_lb_regression_test",
+    name = "ng_pppoe_lb_regression_test.sh",
     description = "Regression tests for bug fixes",
     is_exclusive = true,
     required_user = "root",
@@ -69,7 +69,7 @@ tap_test_program{
 
 -- Integration tests
 tap_test_program{
-    name = "ng_pppoe_lb_integration_test",
+    name = "ng_pppoe_lb_integration_test.sh",
     description = "Full system integration tests",
     is_exclusive = true,
     required_user = "root",
@@ -78,7 +78,7 @@ tap_test_program{
 
 -- Stress tests
 tap_test_program{
-    name = "ng_pppoe_lb_stress_test",
+    name = "ng_pppoe_lb_stress_test.sh",
     description = "Stress and performance tests",
     is_exclusive = true,
     required_user = "root",
@@ -87,7 +87,7 @@ tap_test_program{
 
 -- VM environment tests
 tap_test_program{
-    name = "ng_pppoe_lb_vm_test",
+    name = "ng_pppoe_lb_vm_test.sh",
     description = "VM environment tests",
     is_exclusive = true,
     required_user = "root",
