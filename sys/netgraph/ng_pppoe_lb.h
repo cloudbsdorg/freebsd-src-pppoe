@@ -71,6 +71,7 @@ enum {
 #define NG_PPPOE_LB_WORKER_ACTIVE		0
 #define NG_PPPOE_LB_WORKER_DRAINING		1
 #define NG_PPPOE_LB_WORKER_PENDING_REMOVAL	2
+#define NG_PPPOE_LB_WORKER_REMOVED		3
 
 /* Governor decisions */
 #define NG_PPPOE_LB_GOV_DECISION_NONE		0
@@ -146,6 +147,10 @@ struct ng_pppoe_lb_get_worker_info {
 struct ng_pppoe_lb_get_workers_by_state {
 	uint32_t	state;
 	uint32_t	max_count;
+};
+
+struct ng_pppoe_lb_worker_id {
+	int32_t		worker_id;
 };
 
 /* Trigger scale message (for testing) */
