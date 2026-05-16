@@ -292,16 +292,21 @@ create_node() {
     log_info "Creating netgraph node: $name"
 
     # Create a new netgraph node
-    # NOTE: The hook name MUST be "ether" (NG_PPPOE_LB_HOOK_ETHER).
-    # Other hook names like "lb" are rejected by the module.
-    ngctl mkpeer . pppoe_lb ether "$name" || {
+    # Hook name on new node MUST be "ether" (NG_PPPOE_LB_HOOK_ETHER).
+    ngctl mkpeer . pppoe_lb ether ether || {
         log_error "Failed to create node: $name"
         return 1
     }
-    
+
     # Wait for node to be ready
     sleep 0.5
-    
+
+    ngctl name ether: "$name" || {
+        log_error "Failed to name node: $name"
+        ngctl shutdown ether: 2>/dev/null
+        return 1
+    }
+
     log_pass "Node created: $name"
     return 0
 }
