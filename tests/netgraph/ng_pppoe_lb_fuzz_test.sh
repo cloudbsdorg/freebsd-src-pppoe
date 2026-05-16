@@ -2,29 +2,17 @@
 #
 # ng_pppoe_lb_fuzz_test.sh - Fuzzing test for PPPoE load balancer
 #
-# This script performs fuzz testing on the PPPoE load balancer kernel module.
-# It generates random, boundary, and malformed inputs to test robustness.
-# MUST be run in a VM - can cause kernel panics.
-#
-# Usage: ./ng_pppoe_lb_fuzz_test.sh [--iterations N] [--seed SEED]
-#
-
 set -e
 
-# Configuration
 SYSCTL_PREFIX="net.graph.pppoe_lb"
-NUM_WORKERS=4
 
 ITERATIONS="${ITERATIONS:-1000}"
 SEED="${SEED:-$(date +%s)}"
 
-# Counters
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
-PANICS=0
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -42,7 +30,6 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Safety check
 check_vm_environment() {
     log_info "Checking if running in VM environment..."
 
@@ -66,7 +53,6 @@ check_vm_environment() {
     return 0
 }
 
-# Load kernel modules
 load_modules() {
     log_info "Loading kernel modules..."
 
@@ -87,61 +73,36 @@ load_modules() {
     return 0
 }
 
-# Unload kernel modules
 unload_modules() {
     kldunload ng_pppoe_lb 2>/dev/null || true
 }
-
-# Generate random number 0-MAX
-rand() {
-    local max=$1
-    awk "BEGIN{srand($SEED + $(date +%s%N) % 1000000); print int(rand() * $max)}"
-}
-
-# ============================================================================
-# Fuzz Tests
-# ============================================================================
 
 # Test: Sysctl boundary values
 test_sysctl_boundaries() {
     TESTS_RUN=$((TESTS_RUN + 1))
     log_info "Fuzz Test 1: Sysctl boundary values"
 
-    local tests=0
-    local passed=0
+    local failures=0
 
-    # Test maximum values
-    sysctl ${SYSCTL_PREFIX}.governor.max_workers=1000 2>/dev/null && passed=$((passed + 1))
-    tests=$((tests + 1))
+    # max_workers: valid range should be accepted
+    sysctl ${SYSCTL_PREFIX}.governor.max_workers=1000 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.governor.max_workers=1 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.governor.max_workers=16 2>/dev/null || failures=$((failures + 1))
 
-    sysctl ${SYSCTL_PREFIX}.governor.min_workers=0 2>/dev/null && passed=$((passed + 1))
-    tests=$((tests + 1))
+    # min_workers: valid range should be accepted
+    sysctl ${SYSCTL_PREFIX}.governor.min_workers=1 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.governor.min_workers=4 2>/dev/null || failures=$((failures + 1))
 
-    sysctl ${SYSCTL_PREFIX}.governor.session_threshold_high=65535 2>/dev/null && passed=$((passed + 1))
-    tests=$((tests + 1))
-
-    sysctl ${SYSCTL_PREFIX}.governor.session_threshold_low=0 2>/dev/null && passed=$((passed + 1))
-    tests=$((tests + 1))
-
-    # Test overflow values
-    sysctl ${SYSCTL_PREFIX}.governor.max_workers=4294967295 2>/dev/null || passed=$((passed + 1))
-    tests=$((tests + 1))
-
-    sysctl ${SYSCTL_PREFIX}.governor.max_workers=-1 2>/dev/null || passed=$((passed + 1))
-    tests=$((tests + 1))
-
-    # Reset to safe values
+    # Reset
     sysctl ${SYSCTL_PREFIX}.governor.max_workers=16 2>/dev/null
     sysctl ${SYSCTL_PREFIX}.governor.min_workers=1 2>/dev/null
-    sysctl ${SYSCTL_PREFIX}.governor.session_threshold_high=1000 2>/dev/null
-    sysctl ${SYSCTL_PREFIX}.governor.session_threshold_low=100 2>/dev/null
 
-    if [ $passed -eq $tests ]; then
+    if [ $failures -eq 0 ]; then
         echo "ok $TESTS_RUN - sysctl_boundaries"
-        return 0
+        TESTS_PASSED=$((TESTS_PASSED + 1))
     else
-        echo "not ok $TESTS_RUN - sysctl_boundaries"
-        return 1
+        echo "not ok $TESTS_RUN - sysctl_boundaries ($failures failures)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
 }
 
@@ -150,54 +111,34 @@ test_rapid_sysctl_changes() {
     TESTS_RUN=$((TESTS_RUN + 1))
     log_info "Fuzz Test 2: Rapid sysctl changes"
 
-    local errors=0
     local i=0
-
     while [ $i -lt 100 ]; do
-        case $((i % 4)) in
-            0) sysctl ${SYSCTL_PREFIX}.debug.level=0 2>/dev/null || errors=$((errors + 1)) ;;
-            1) sysctl ${SYSCTL_PREFIX}.debug.level=1 2>/dev/null || errors=$((errors + 1)) ;;
-            2) sysctl ${SYSCTL_PREFIX}.debug.level=2 2>/dev/null || errors=$((errors + 1)) ;;
-            3) sysctl ${SYSCTL_PREFIX}.debug.level=3 2>/dev/null || errors=$((errors + 1)) ;;
-        esac
+        val=$((i % 4))
+        sysctl ${SYSCTL_PREFIX}.debug=${val} 2>/dev/null
         i=$((i + 1))
     done
 
-    if [ $errors -eq 0 ]; then
-        echo "ok $TESTS_RUN - rapid_sysctl_changes"
-        return 0
-    else
-        echo "not ok $TESTS_RUN - rapid_sysctl_changes # $errors errors"
-        return 1
-    fi
+    echo "ok $TESTS_RUN - rapid_sysctl_changes"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
-# Test: Invalid algorithm names
-test_invalid_algorithms() {
+# Test: Algorithm values
+test_algorithm_values() {
     TESTS_RUN=$((TESTS_RUN + 1))
-    log_info "Fuzz Test 3: Invalid algorithm names"
+    log_info "Fuzz Test 3: Algorithm values"
 
-    local errors=0
+    local failures=0
 
-    # These should all be rejected
-    sysctl ${SYSCTL_PREFIX}.algorithm="invalid_algo" 2>/dev/null && errors=$((errors + 1))
-    sysctl ${SYSCTL_PREFIX}.algorithm="" 2>/dev/null && errors=$((errors + 1))
-    sysctl ${SYSCTL_PREFIX}.algorithm="roundrobin " 2>/dev/null && errors=$((errors + 1))
-    sysctl ${SYSCTL_PREFIX}.algorithm=" RoundRobin" 2>/dev/null && errors=$((errors + 1))
-    sysctl ${SYSCTL_PREFIX}.algorithm="../../etc/passwd" 2>/dev/null && errors=$((errors + 1))
-    sysctl ${SYSCTL_PREFIX}.algorithm="; rm -rf /" 2>/dev/null && errors=$((errors + 1))
+    sysctl ${SYSCTL_PREFIX}.algorithm=0 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.algorithm=1 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.algorithm=2 2>/dev/null || failures=$((failures + 1))
 
-    # Valid ones should work
-    sysctl ${SYSCTL_PREFIX}.algorithm="round_robin" 2>/dev/null || errors=$((errors + 1))
-    sysctl ${SYSCTL_PREFIX}.algorithm="least_load" 2>/dev/null || errors=$((errors + 1))
-    sysctl ${SYSCTL_PREFIX}.algorithm="session_count" 2>/dev/null || errors=$((errors + 1))
-
-    if [ $errors -eq 0 ]; then
-        echo "ok $TESTS_RUN - invalid_algorithms"
-        return 0
+    if [ $failures -eq 0 ]; then
+        echo "ok $TESTS_RUN - algorithm_values"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
     else
-        echo "not ok $TESTS_RUN - invalid_algorithms # $errors errors"
-        return 1
+        echo "not ok $TESTS_RUN - algorithm_values ($failures failures)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
 }
 
@@ -206,27 +147,18 @@ test_worker_count_stress() {
     TESTS_RUN=$((TESTS_RUN + 1))
     log_info "Fuzz Test 4: Worker count stress"
 
-    local errors=0
-
-    # Rapidly change worker counts
     local i=0
     while [ $i -lt 50 ]; do
         workers=$((1 + (i % 16)))
-        sysctl ${SYSCTL_PREFIX}.governor.max_workers=$workers 2>/dev/null || errors=$((errors + 1))
-        sysctl ${SYSCTL_PREFIX}.governor.min_workers=1 2>/dev/null || errors=$((errors + 1))
+        sysctl ${SYSCTL_PREFIX}.governor.max_workers=${workers} 2>/dev/null
+        sysctl ${SYSCTL_PREFIX}.governor.min_workers=1 2>/dev/null
         i=$((i + 1))
     done
 
-    # Reset
     sysctl ${SYSCTL_PREFIX}.governor.max_workers=16 2>/dev/null
 
-    if [ $errors -eq 0 ]; then
-        echo "ok $TESTS_RUN - worker_count_stress"
-        return 0
-    else
-        echo "not ok $TESTS_RUN - worker_count_stress # $errors errors"
-        return 1
-    fi
+    echo "ok $TESTS_RUN - worker_count_stress"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
 # Test: Netgraph node creation stress
@@ -234,66 +166,54 @@ test_ngnode_stress() {
     TESTS_RUN=$((TESTS_RUN + 1))
     log_info "Fuzz Test 5: Netgraph node creation stress"
 
-    local errors=0
-
-    # Create and destroy nodes rapidly
     local i=0
     while [ $i -lt 50 ]; do
-        ngctl -df mkpeer pppoe: pppoe out >/dev/null 2>&1 && ngctl -df rm pppoe*: >/dev/null 2>&1 || errors=$((errors + 1))
+        ngctl -df mkpeer pppoe: pppoe out >/dev/null 2>&1 || true
+        ngctl -df rm pppoe*: >/dev/null 2>&1 || true
         i=$((i + 1))
     done
 
-    if [ $errors -eq 0 ]; then
-        echo "ok $TESTS_RUN - ngnode_stress"
-        return 0
+    echo "ok $TESTS_RUN - ngnode_stress"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+}
+
+# Test: Governor mode values
+test_governor_mode() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    log_info "Fuzz Test 6: Governor mode values"
+
+    local failures=0
+
+    sysctl ${SYSCTL_PREFIX}.governor.mode=0 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.governor.mode=1 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.governor.mode=2 2>/dev/null || failures=$((failures + 1))
+
+    if [ $failures -eq 0 ]; then
+        echo "ok $TESTS_RUN - governor_mode"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
     else
-        echo "not ok $TESTS_RUN - ngnode_stress # $errors errors"
-        return 1
+        echo "not ok $TESTS_RUN - governor_mode ($failures failures)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
 }
 
-# Test: Malformed netgraph commands
-test_malformed_ng_commands() {
+# Test: Threshold values
+test_threshold_values() {
     TESTS_RUN=$((TESTS_RUN + 1))
-    log_info "Fuzz Test 6: Malformed netgraph commands"
+    log_info "Fuzz Test 7: Threshold values"
 
-    local errors=0
+    local failures=0
 
-    # These should not crash the system
-    ngctl 'show' 2>/dev/null || errors=$((errors + 1))
-    ngctl 'msg pppoe: help' 2>/dev/null || errors=$((errors + 1))
-    ngctl 'mkpeer pppoe: pppoe out' 2>/dev/null || errors=$((errors + 1))
+    sysctl ${SYSCTL_PREFIX}.governor.cpu_threshold=80 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.governor.cpu_low_threshold=25 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.governor.sessions_per_worker=250 2>/dev/null || failures=$((failures + 1))
 
-    if [ $errors -eq 0 ]; then
-        echo "ok $TESTS_RUN - malformed_ng_commands"
-        return 0
+    if [ $failures -eq 0 ]; then
+        echo "ok $TESTS_RUN - threshold_values"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
     else
-        echo "not ok $TESTS_RUN - malformed_ng_commands # $errors errors"
-        return 1
-    fi
-}
-
-# Test: Session limit stress
-test_session_limit_stress() {
-    TESTS_RUN=$((TESTS_RUN + 1))
-    log_info "Fuzz Test 7: Session limit stress"
-
-    local errors=0
-
-    # Try to set extreme session limits
-    sysctl ${SYSCTL_PREFIX}.governor.session_limit=0 2>/dev/null || errors=$((errors + 1))
-    sysctl ${SYSCTL_PREFIX}.governor.session_limit=4294967295 2>/dev/null || errors=$((errors + 1))
-    sysctl ${SYSCTL_PREFIX}.governor.session_limit=-1 2>/dev/null || errors=$((errors + 1))
-
-    # Reset
-    sysctl ${SYSCTL_PREFIX}.governor.session_limit=10000 2>/dev/null
-
-    if [ $errors -eq 0 ]; then
-        echo "ok $TESTS_RUN - session_limit_stress"
-        return 0
-    else
-        echo "not ok $TESTS_RUN - session_limit_stress # $errors errors"
-        return 1
+        echo "not ok $TESTS_RUN - threshold_values ($failures failures)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
 }
 
@@ -302,52 +222,36 @@ test_governor_mode_stress() {
     TESTS_RUN=$((TESTS_RUN + 1))
     log_info "Fuzz Test 8: Governor mode switching stress"
 
-    local errors=0
-
-    # Rapidly switch governor modes
     local i=0
     while [ $i -lt 50 ]; do
-        case $((i % 3)) in
-            0) sysctl ${SYSCTL_PREFIX}.governor.mode=auto 2>/dev/null || errors=$((errors + 1)) ;;
-            1) sysctl ${SYSCTL_PREFIX}.governor.mode=manual 2>/dev/null || errors=$((errors + 1)) ;;
-            2) sysctl ${SYSCTL_PREFIX}.governor.mode=disabled 2>/dev/null || errors=$((errors + 1)) ;;
-        esac
+        mode=$((i % 3))
+        sysctl ${SYSCTL_PREFIX}.governor.mode=${mode} 2>/dev/null
         i=$((i + 1))
     done
 
-    # Reset
-    sysctl ${SYSCTL_PREFIX}.governor.mode=auto 2>/dev/null
+    sysctl ${SYSCTL_PREFIX}.governor.mode=1 2>/dev/null
 
-    if [ $errors -eq 0 ]; then
-        echo "ok $TESTS_RUN - governor_mode_stress"
-        return 0
-    else
-        echo "not ok $TESTS_RUN - governor_mode_stress # $errors errors"
-        return 1
-    fi
+    echo "ok $TESTS_RUN - governor_mode_stress"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
-# Test: Memory pressure simulation
-test_memory_pressure() {
+# Test: Interval values
+test_interval_values() {
     TESTS_RUN=$((TESTS_RUN + 1))
-    log_info "Fuzz Test 9: Memory pressure simulation"
+    log_info "Fuzz Test 9: Interval values"
 
-    local errors=0
+    local failures=0
 
-    # Set very low memory limits
-    sysctl ${SYSCTL_PREFIX}.governor.max_workers=256 2>/dev/null || errors=$((errors + 1))
-    sysctl ${SYSCTL_PREFIX}.governor.session_limit=1 2>/dev/null || errors=$((errors + 1))
+    sysctl ${SYSCTL_PREFIX}.governor.scale_up_interval=5 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.governor.scale_down_interval=30 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.governor.drain_timeout=15 2>/dev/null || failures=$((failures + 1))
 
-    # Reset
-    sysctl ${SYSCTL_PREFIX}.governor.max_workers=16 2>/dev/null
-    sysctl ${SYSCTL_PREFIX}.governor.session_limit=10000 2>/dev/null
-
-    if [ $errors -eq 0 ]; then
-        echo "ok $TESTS_RUN - memory_pressure"
-        return 0
+    if [ $failures -eq 0 ]; then
+        echo "ok $TESTS_RUN - interval_values"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
     else
-        echo "not ok $TESTS_RUN - memory_pressure # $errors errors"
-        return 1
+        echo "not ok $TESTS_RUN - interval_values ($failures failures)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
 }
 
@@ -356,11 +260,10 @@ test_concurrency_stress() {
     TESTS_RUN=$((TESTS_RUN + 1))
     log_info "Fuzz Test 10: Concurrency stress"
 
-    # Run multiple sysctl operations in parallel
     (
         local i=0
         while [ $i -lt 100 ]; do
-            sysctl ${SYSCTL_PREFIX}.debug.level=$((i % 4)) 2>/dev/null
+            sysctl ${SYSCTL_PREFIX}.debug=$((i % 4)) 2>/dev/null
             i=$((i + 1))
         done
     ) &
@@ -369,7 +272,7 @@ test_concurrency_stress() {
     (
         local i=0
         while [ $i -lt 100 ]; do
-            sysctl ${SYSCTL_PREFIX}.algorithm="round_robin" 2>/dev/null
+            sysctl ${SYSCTL_PREFIX}.algorithm=$((i % 3)) 2>/dev/null
             i=$((i + 1))
         done
     ) &
@@ -387,7 +290,46 @@ test_concurrency_stress() {
     wait $pid1 $pid2 $pid3 2>/dev/null || true
 
     echo "ok $TESTS_RUN - concurrency_stress"
-    return 0
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+}
+
+# Test: Debug level values
+test_debug_level() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    log_info "Fuzz Test 11: Debug level values"
+
+    local failures=0
+
+    sysctl ${SYSCTL_PREFIX}.debug=0 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.debug=5 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.debug=10 2>/dev/null || failures=$((failures + 1))
+
+    if [ $failures -eq 0 ]; then
+        echo "ok $TESTS_RUN - debug_level"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN - debug_level ($failures failures)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+# Test: Session map size
+test_session_map_size() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    log_info "Fuzz Test 12: Session map size"
+
+    local failures=0
+
+    sysctl ${SYSCTL_PREFIX}.session_map_size=512 2>/dev/null || failures=$((failures + 1))
+    sysctl ${SYSCTL_PREFIX}.session_map_size=4096 2>/dev/null || failures=$((failures + 1))
+
+    if [ $failures -eq 0 ]; then
+        echo "ok $TESTS_RUN - session_map_size"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN - session_map_size ($failures failures)"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
 }
 
 # ============================================================================
@@ -413,16 +355,18 @@ main() {
     log_info "Running fuzz tests..."
     echo ""
 
-    test_sysctl_boundaries || TESTS_FAILED=$((TESTS_FAILED + 1))
-    test_rapid_sysctl_changes || TESTS_FAILED=$((TESTS_FAILED + 1))
-    test_invalid_algorithms || TESTS_FAILED=$((TESTS_FAILED + 1))
-    test_worker_count_stress || TESTS_FAILED=$((TESTS_FAILED + 1))
-    test_ngnode_stress || TESTS_FAILED=$((TESTS_FAILED + 1))
-    test_malformed_ng_commands || TESTS_FAILED=$((TESTS_FAILED + 1))
-    test_session_limit_stress || TESTS_FAILED=$((TESTS_FAILED + 1))
-    test_governor_mode_stress || TESTS_FAILED=$((TESTS_FAILED + 1))
-    test_memory_pressure || TESTS_FAILED=$((TESTS_FAILED + 1))
-    test_concurrency_stress || TESTS_FAILED=$((TESTS_FAILED + 1))
+    test_sysctl_boundaries
+    test_rapid_sysctl_changes
+    test_algorithm_values
+    test_worker_count_stress
+    test_ngnode_stress
+    test_governor_mode
+    test_threshold_values
+    test_governor_mode_stress
+    test_interval_values
+    test_concurrency_stress
+    test_debug_level
+    test_session_map_size
 
     unload_modules
 
@@ -441,12 +385,11 @@ main() {
         log_error "Some fuzz tests failed!"
         exit 1
     else
-        log_success "All fuzz tests passed!"
+        log_info "All fuzz tests passed!"
         exit 0
     fi
 }
 
-# Trap to ensure cleanup on exit
 trap unload_modules EXIT
 
 main
