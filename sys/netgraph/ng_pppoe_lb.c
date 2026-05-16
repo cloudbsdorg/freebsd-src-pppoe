@@ -406,7 +406,6 @@ ng_pppoe_lb_constructor(node_p node)
 	struct ng_pppoe_lb_private *priv;
 	int max_workers_alloc;
 
-	printf("%s: loaded\\n", ng_pppoe_lb_version);
 	priv = malloc(sizeof(*priv), M_NETGRAPH, M_NOWAIT | M_ZERO);
 	if (priv == NULL)
 		return (ENOMEM);
@@ -417,6 +416,9 @@ ng_pppoe_lb_constructor(node_p node)
 	priv->num_workers_active = 0;
 	priv->num_workers_draining = 0;
 	priv->num_pending_removals = 0;
+	priv->debug_level = ng_pppoe_lb_debug;
+	if (priv->debug_level >= 1)
+		printf("%s: loaded\n", ng_pppoe_lb_version);
 
 	/* Initialize max_workers: 0 means auto-detect to mp_ncpus */
 	ng_pppoe_lb_governor_cpu_cores_max = mp_ncpus;
@@ -896,7 +898,9 @@ ng_pppoe_lb_newhook(node_p node, hook_p hook, const char *name)
 	struct ng_pppoe_lb_private *priv;
 
 	priv = GET_NODE_PRIV(node);
-	printf("ng_pppoe_lb_newhook: START node=%p hook=%p name='%s'\n", node, hook, name);
+	if (priv->debug_level >= 2)
+		printf("ng_pppoe_lb_newhook: START node=%p hook=%p name='%s'\n",
+		    node, hook, name);
 
 	if (strcmp(name, NG_PPPOE_LB_HOOK_ETHER) == 0) {
 		if (priv->ether_hook != NULL)
@@ -909,7 +913,8 @@ ng_pppoe_lb_newhook(node_p node, hook_p hook, const char *name)
 	    strlen(NG_PPPOE_LB_HOOK_WORKER_BASE)) == 0) {
 		NG_HOOK_SET_PRIVATE(hook, priv);
 	} else {
-		printf("ng_pppoe_lb_newhook: rejecting invalid hook name '%s'\n", name);
+		if (priv->debug_level >= 1)
+			printf("ng_pppoe_lb_newhook: rejecting invalid hook name '%s'\n", name);
 		return (EINVAL);
 	}
 
@@ -924,13 +929,13 @@ ng_pppoe_lb_connect(hook_p hook)
 	hook_p *new_hooks;
 	int new_size;
 
-	printf("ng_pppoe_lb_connect: hook=%p\n", hook);
 	priv = GET_PRIV(hook);
-	printf("ng_pppoe_lb_connect: priv=%p\n", priv);
 	if (priv == NULL) {
 		printf("ng_pppoe_lb_connect: priv is NULL, returning EINVAL\n");
 		return (EINVAL);
 	}
+	if (priv->debug_level >= 2)
+		printf("ng_pppoe_lb_connect: hook=%p\n", hook);
 
 	if (hook == priv->ether_hook) {
 		/* Ethernet hook connected */

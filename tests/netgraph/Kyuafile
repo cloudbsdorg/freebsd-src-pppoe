@@ -1,0 +1,100 @@
+--
+-- SPDX-License-Identifier: BSD-2-Clause
+--
+-- Copyright (c) 2025 CloudBSD Inc.
+-- All rights reserved.
+--
+-- Redistribution and use in source and binary forms, with or without
+-- modification, are permitted provided that the following conditions
+-- are met:
+-- 1. Redistributions of source code must retain the above copyright
+--    notice, this list of conditions and the following disclaimer.
+-- 2. Redistributions in binary form must reproduce the above copyright
+--    notice, this list of conditions and the following disclaimer in the
+--    documentation and/or other materials provided with the distribution.
+--
+-- THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+-- ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+-- IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+-- ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+-- FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+-- DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+-- OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+-- HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+-- LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+-- OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+-- SUCH DAMAGE.
+
+-- Kyuafile for PPPoE Load Balancer Tests
+--
+-- This Kyuafile integrates the PPPoE Load Balancer test suite into FreeBSD's
+-- kyua test infrastructure. Tests are organized into categories:
+--   - unit:      Unit tests for kernel module internals
+--   - config:    Configuration and sysctl interface tests
+--   - regression: Regression tests for fixed bugs
+--   - integration: Full system integration tests
+--   - stress:    Stress and performance tests
+--   - vm:        VM-environment specific tests
+--
+-- Usage:
+--   kyua test [-v]              Run all tests
+--   kyua test -t unit           Run unit tests only
+--   kyua test -t regression     Run regression tests only
+
+syntax(2)
+
+-- Test categories and their scripts
+local test_suites = {
+    {
+        name = "unit",
+        script = "ng_pppoe_lb_unit_test.sh",
+        description = "Unit tests for ng_pppoe_lb kernel module",
+        timeout = 300,
+    },
+    {
+        name = "config",
+        script = "ng_pppoe_lb_config_test.sh",
+        description = "Configuration and sysctl interface tests",
+        timeout = 180,
+    },
+    {
+        name = "regression",
+        script = "ng_pppoe_lb_regression_test.sh",
+        description = "Regression tests for bug fixes",
+        timeout = 300,
+    },
+    {
+        name = "integration",
+        script = "ng_pppoe_lb_integration_test.sh",
+        description = "Full system integration tests",
+        timeout = 600,
+    },
+    {
+        name = "stress",
+        script = "ng_pppoe_lb_stress_test.sh",
+        description = "Stress and performance tests",
+        timeout = 900,
+    },
+    {
+        name = "vm",
+        script = "ng_pppoe_lb_vm_test.sh",
+        description = "VM environment tests",
+        timeout = 300,
+    },
+}
+
+-- Include each test suite
+for i, suite in ipairs(test_suites) do
+    local test_path = suite.script
+
+    -- Add test with metadata
+    add_test(test_path)
+
+    -- Set test-specific variables
+    if suite.timeout then
+        set_test_var(test_path, "timeout", suite.timeout)
+    end
+end
+
+-- Test metadata
+headers.add("net.graph.pppoe_lb")
