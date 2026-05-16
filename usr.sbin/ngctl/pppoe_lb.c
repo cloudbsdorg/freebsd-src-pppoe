@@ -194,7 +194,7 @@ const struct ngcmd pppoe_lb_worker_cmd = {
 
 const struct ngcmd pppoe_lb_governor_cmd = {
 	PppoeLbGovernorCmd,
-	"lb_governor <path>",
+	"lb_gov <path>",
 	"Show PPPoE governor status",
 	"Displays governor configuration and current state.",
 	{ NULL }
