@@ -37,19 +37,24 @@ log_error() {
 # Safety check - ensure we're in a VM
 check_vm_environment() {
     log_info "Checking if running in VM environment..."
-    
+
     # Check for common VM indicators
     if dmesg | grep -qi "bhyve\|qemu\|virtualbox\|vmware\|hyperv"; then
         log_info "VM environment detected - proceeding with tests"
         return 0
     fi
-    
+
     # Check for VM-specific hardware
     if lspci | grep -qi "virtual\|vmware\|qemu"; then
         log_info "VM hardware detected - proceeding with tests"
         return 0
     fi
-    
+
+    if [ "${CI_MODE}" = "true" ]; then
+        log_info "CI_MODE detected, continuing anyway"
+        return 0
+    fi
+
     # If we can't confirm VM, warn but continue (for testing purposes)
     log_warn "Cannot confirm VM environment - ensure you are running in a VM!"
     log_warn "This script should NEVER be run on production hardware"
@@ -669,107 +674,126 @@ main() {
     log_info ""
     
     check_vm_environment
-    
+
+    TESTS_RUN=0
     TESTS_PASSED=0
     TESTS_FAILED=0
     
     # Run tests
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_module_lifecycle; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_topology_creation; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_sysctl_config; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_config; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_status; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_worker_sysctls; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_ngctl_commands; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_algorithm_selection; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_worker_state_management; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_thresholds; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_mode_switching; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_debug_level; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_scaling_decision; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_per_worker_metrics; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_governor_intervals; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    TESTS_RUN=$((TESTS_RUN + 1))
     if test_memory_leak; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
-    
+
+    echo "1..${TESTS_RUN}"
+
     # Summary
     log_info ""
     log_info "========================================"

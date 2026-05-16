@@ -36,6 +36,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Counters
+TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
 SESSIONS_CREATED=0
@@ -82,12 +83,16 @@ check_root() {
 check_vm_environment() {
     if ! grep -qi 'vmware\|virtualbox\|qemu\|kvm\|bhyve' /var/run/dmesg.boot 2>/dev/null; then
         log_warn "Not detected as VM environment"
-        log_warn "Running stress tests on bare metal may cause system instability"
-        printf "Continue anyway? [y/N] "
-        read -r answer
-        if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
-            log_info "Aborted"
-            exit 0
+        if [ "${CI_MODE}" = "true" ]; then
+            log_info "CI_MODE detected, continuing anyway"
+        else
+            log_warn "Running stress tests on bare metal may cause system instability"
+            printf "Continue anyway? [y/N] "
+            read -r answer
+            if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
+                log_info "Aborted"
+                exit 0
+            fi
         fi
     fi
 }
@@ -162,6 +167,7 @@ wait_for_sessions() {
 
 # Test 1: Rapid session creation
 test_rapid_session_creation() {
+    TESTS_RUN=$((TESTS_RUN + 1))
     log_section "Test 1: Rapid Session Creation"
     
     local start_time=$(date +%s)
@@ -536,7 +542,9 @@ main() {
     
     # Cleanup
     unload_modules
-    
+
+    echo "1..${TESTS_RUN:-1}"
+
     # Summary
     log_section "Stress Test Summary"
     log_info "Sessions created: $SESSIONS_CREATED"

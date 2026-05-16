@@ -173,12 +173,16 @@ check_root() {
 check_vm_environment() {
     if ! grep -qi 'vmware\|virtualbox\|qemu\|kvm\|bhyve' /var/run/dmesg.boot 2>/dev/null; then
         log_warn "Not detected as VM environment"
-        log_warn "Integration tests on bare metal may affect system stability"
-        printf "Continue anyway? [y/N] "
-        read -r answer
-        if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
-            log_info "Aborted"
-            exit 0
+        if [ "${CI_MODE}" = "true" ]; then
+            log_info "CI_MODE detected, continuing anyway"
+        else
+            log_warn "Integration tests on bare metal may affect system stability"
+            printf "Continue anyway? [y/N] "
+            read -r answer
+            if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
+                log_info "Aborted"
+                exit 0
+            fi
         fi
     fi
 }
