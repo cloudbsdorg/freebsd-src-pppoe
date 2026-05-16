@@ -267,7 +267,9 @@ struct ng_pppoe_lb_private {
 	struct mtx				mtx;
 	hook_p					ether_hook;
 	hook_p					*worker_hooks;
-	struct ng_pppoe_lb_worker			*workers;	/* Worker info array */
+	struct ng_pppoe_lb_worker			*workers;
+	uint32_t					*worker_states;
+	int					*worker_id_to_idx;	/* Maps worker_id to current array index */
 	int					num_workers;
 	int					num_workers_active;
 	int					num_workers_draining;
@@ -433,6 +435,23 @@ ng_pppoe_lb_constructor(node_p node)
 		free(priv, M_NETGRAPH);
 		return (ENOMEM);
 	}
+	priv->worker_states = malloc(max_workers_alloc * sizeof(*priv->worker_states), M_NETGRAPH, M_NOWAIT | M_ZERO);
+	if (priv->worker_states == NULL) {
+		mtx_destroy(&priv->mtx);
+		free(priv->workers, M_NETGRAPH);
+		free(priv, M_NETGRAPH);
+		return (ENOMEM);
+	}
+	priv->worker_id_to_idx = malloc(max_workers_alloc * sizeof(*priv->worker_id_to_idx), M_NETGRAPH, M_NOWAIT | M_ZERO);
+	if (priv->worker_id_to_idx == NULL) {
+		mtx_destroy(&priv->mtx);
+		free(priv->workers, M_NETGRAPH);
+		free(priv->worker_states, M_NETGRAPH);
+		free(priv, M_NETGRAPH);
+		return (ENOMEM);
+	}
+	for (int i = 0; i < max_workers_alloc; i++)
+		priv->worker_id_to_idx[i] = -1;
 
 	priv->algorithm = ng_pppoe_lb_algorithm;
 	priv->debug_level = ng_pppoe_lb_debug;
@@ -476,6 +495,31 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 		case NGM_PPPOE_LB_REMOVE_WORKER:
 			/* Handled via disconnect */
 			break;
+
+		case NGM_PPPOE_LB_REMOVE_WORKER_BY_ID: {
+			struct ng_pppoe_lb_worker_id *wid;
+			int widx;
+
+			if (msg->header.arglen != sizeof(*wid)) {
+				error = EINVAL;
+				break;
+			}
+			wid = (struct ng_pppoe_lb_worker_id *)msg->data;
+			mtx_lock(&priv->mtx);
+			if (wid->worker_id < 0 || wid->worker_id >= priv->num_workers) {
+				mtx_unlock(&priv->mtx);
+				error = EINVAL;
+				break;
+			}
+			widx = wid->worker_id;
+			if (priv->worker_states[widx] == NG_PPPOE_LB_WORKER_PENDING_REMOVAL) {
+				priv->worker_states[widx] = NG_PPPOE_LB_WORKER_REMOVED;
+				priv->num_pending_removals--;
+			}
+			mtx_unlock(&priv->mtx);
+			error = EINVAL;
+			break;
+		}
 
 		case NGM_PPPOE_LB_SET_CONFIG: {
 			struct ng_pppoe_lb_config *cfg;
@@ -560,7 +604,7 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 		case NGM_PPPOE_LB_SET_WORKER_STATE: {
 			struct ng_pppoe_lb_set_worker_state *req;
 			struct ng_pppoe_lb_worker *worker;
-
+			int widx = -1;
 			if (msg->header.arglen != sizeof(*req)) {
 				error = EINVAL;
 				break;
@@ -569,8 +613,16 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 
 			mtx_lock(&priv->mtx);
 
+			/* Find worker by worker_id */
+			for (int i = 0; i < priv->num_workers; i++) {
+				if (priv->workers[i].worker_id == req->worker_id) {
+					widx = i;
+					break;
+				}
+			}
+
 			/* Validate worker ID */
-			if (req->worker_id < 0 || req->worker_id >= priv->num_workers) {
+			if (widx < 0 || widx >= priv->num_workers) {
 				mtx_unlock(&priv->mtx);
 				error = ENOENT;
 				break;
@@ -583,7 +635,7 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 				break;
 			}
 
-			worker = &priv->workers[req->worker_id];
+			worker = &priv->workers[widx];
 
 			/* Can't set PENDING_REMOVAL if worker has active sessions */
 			if (req->state == NG_PPPOE_LB_WORKER_PENDING_REMOVAL && worker->sessions > 0) {
@@ -592,25 +644,25 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 				break;
 			}
 
-			/* Update state */
-			worker->state = req->state;
+			/* Update state in worker_states array */
+			priv->worker_states[req->worker_id] = req->state;
 			worker->last_activity = time_uptime;
 
-			/* Update counters */
-			if (worker->state == NG_PPPOE_LB_WORKER_ACTIVE)
+			/* Update counters - only increment, don't decrement (decrement handled by disconnect) */
+			if (req->state == NG_PPPOE_LB_WORKER_ACTIVE)
 				priv->num_workers_active++;
-			else if (worker->state == NG_PPPOE_LB_WORKER_DRAINING)
+			else if (req->state == NG_PPPOE_LB_WORKER_DRAINING)
 				priv->num_workers_draining++;
-			else if (worker->state == NG_PPPOE_LB_WORKER_PENDING_REMOVAL)
+			else if (req->state == NG_PPPOE_LB_WORKER_PENDING_REMOVAL)
 				priv->num_pending_removals++;
 
 			/* Track pending removal for "change mind" feature */
 			if (req->state == NG_PPPOE_LB_WORKER_DRAINING) {
 				worker->drain_start_time = time_uptime;
-				priv->pending_removal_id = req->worker_id;
+				priv->pending_removal_id = widx;
 			} else if (req->state == NG_PPPOE_LB_WORKER_ACTIVE) {
 				/* Cancel any pending removal for this worker */
-				if (priv->pending_removal_id == req->worker_id) {
+				if (priv->pending_removal_id == widx) {
 					priv->pending_removal_id = -1;
 					ng_pppoe_lb_governor_last_decision = NG_PPPOE_LB_GOV_DECISION_CANCEL_DOWN;
 					ng_pppoe_lb_governor_last_reason = NG_PPPOE_LB_GOV_REASON_CPU_HIGH;
@@ -649,9 +701,17 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 			 * before validation.
 			 */
 			int wid = (req->worker_id == -1) ? 0 : req->worker_id;
+			int widx = -1;
+
+			for (int i = 0; i < priv->num_workers; i++) {
+				if (priv->workers[i].worker_id == wid) {
+					widx = i;
+					break;
+				}
+			}
 
 			/* Validate worker ID */
-			if (wid < 0 || wid >= priv->num_workers) {
+			if (widx < 0 || widx >= priv->num_workers) {
 				mtx_unlock(&priv->mtx);
 				free(resp, M_NETGRAPH);
 				error = ENOENT;
@@ -659,15 +719,57 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 			}
 
 			info->worker_id = wid;
-			info->state = priv->workers[wid].state;
-			info->sessions = priv->workers[wid].sessions;
-			info->last_activity = priv->workers[wid].last_activity;
-			info->uptime = time_uptime - priv->workers[wid].start_time;
-			info->packets_in = priv->workers[wid].packets_in;
-			info->packets_out = priv->workers[wid].packets_out;
-			info->bytes_in = priv->workers[wid].bytes_in;
-			info->bytes_out = priv->workers[wid].bytes_out;
+			info->state = priv->worker_states[wid];
+			info->sessions = priv->workers[widx].sessions;
+			info->last_activity = priv->workers[widx].last_activity;
+			info->uptime = time_uptime - priv->workers[widx].start_time;
+			info->packets_in = priv->workers[widx].packets_in;
+			info->packets_out = priv->workers[widx].packets_out;
+			info->bytes_in = priv->workers[widx].bytes_in;
+			info->bytes_out = priv->workers[widx].bytes_out;
+			if (priv->worker_hooks[widx] != NULL)
+				strlcpy(info->hook_name, priv->worker_hooks[widx]->hk_name,
+				    sizeof(info->hook_name));
+			else
+				info->hook_name[0] = '\0';
 
+			mtx_unlock(&priv->mtx);
+			break;
+		}
+
+		case NGM_PPPOE_LB_GET_WORKERS_BY_STATE: {
+			struct ng_pppoe_lb_get_workers_by_state *req;
+			int32_t *ids;
+			int count, i;
+
+			if (msg->header.arglen != sizeof(*req)) {
+				error = EINVAL;
+				break;
+			}
+			req = (struct ng_pppoe_lb_get_workers_by_state *)msg->data;
+
+			mtx_lock(&priv->mtx);
+			count = 0;
+			for (i = 0; i < priv->num_workers && count < req->max_count; i++) {
+				if (priv->worker_states[priv->workers[i].worker_id] == req->state)
+					count++;
+			}
+			resp = malloc(sizeof(*resp) + count * sizeof(int32_t),
+			    M_NETGRAPH_PPPOE_LB, M_NOWAIT | M_ZERO);
+			if (resp == NULL) {
+				mtx_unlock(&priv->mtx);
+				error = ENOMEM;
+				break;
+			}
+			resp->header.typecookie = NGM_PPPOE_LB_COOKIE;
+			resp->header.cmd = NGM_PPPOE_LB_GET_WORKERS_BY_STATE;
+			resp->header.arglen = sizeof(*resp) + count * sizeof(int32_t);
+			ids = (int32_t *)resp->data;
+			count = 0;
+			for (i = 0; i < priv->num_workers && count < req->max_count; i++) {
+				if (priv->worker_states[priv->workers[i].worker_id] == req->state)
+					ids[count++] = priv->workers[i].worker_id;
+			}
 			mtx_unlock(&priv->mtx);
 			break;
 		}
@@ -771,11 +873,15 @@ ng_pppoe_lb_shutdown(node_p node)
 	}
 	mtx_unlock(&priv->mtx);
 
-	/* Free worker hooks array */
 	if (priv->worker_hooks != NULL)
 		free(priv->worker_hooks, M_NETGRAPH);
 
+	free(priv->workers, M_NETGRAPH);
+	free(priv->worker_states, M_NETGRAPH);
+	free(priv->worker_id_to_idx, M_NETGRAPH);
+
 	mtx_destroy(&priv->mtx);
+	free(priv, M_NETGRAPH);
 
 	NG_NODE_SET_PRIVATE(node, NULL);
 	NG_NODE_UNREF(node);
@@ -845,8 +951,13 @@ ng_pppoe_lb_connect(hook_p hook)
 		mtx_unlock(&priv->mtx);
 		return (ENOMEM);
 	}
+	int idx = priv->num_workers;
 	priv->worker_hooks = new_hooks;
-	priv->worker_hooks[priv->num_workers] = hook;
+	priv->worker_hooks[idx] = hook;
+	priv->workers[idx].worker_id = idx;
+	priv->workers[idx].state = NG_PPPOE_LB_WORKER_ACTIVE;
+	priv->worker_states[idx] = NG_PPPOE_LB_WORKER_ACTIVE;
+	priv->worker_id_to_idx[idx] = idx;
 	priv->num_workers++;
 	priv->num_workers_active++;
 	mtx_unlock(&priv->mtx);
@@ -942,7 +1053,8 @@ ng_pppoe_lb_disconnect(hook_p hook)
 
 	if (idx >= 0) {
 		struct ng_pppoe_lb_sess_entry *sess_entry, *sess_tmp;
-		int worker_state = priv->workers[idx].state;
+		uint32_t removed_worker_id = priv->workers[idx].worker_id;
+		int worker_state = priv->worker_states[removed_worker_id];
 
 		/*
 		 * Clean up sessions mapped to this worker before removal.
@@ -964,19 +1076,27 @@ ng_pppoe_lb_disconnect(hook_p hook)
 			}
 		}
 
-		/* Shift remaining hooks */
 		for (i = idx; i < priv->num_workers - 1; i++)
 			priv->worker_hooks[i] = priv->worker_hooks[i + 1];
+		priv->worker_hooks[priv->num_workers - 1] = NULL;
 
-		/* Shift remaining workers to match */
 		for (i = idx; i < priv->num_workers - 1; i++)
 			priv->workers[i] = priv->workers[i + 1];
+		bzero(&priv->workers[priv->num_workers - 1], sizeof(priv->workers[priv->num_workers - 1]));
+
+		for (i = idx; i < priv->num_workers - 1; i++)
+			priv->worker_id_to_idx[priv->workers[i].worker_id] = i;
+		priv->worker_id_to_idx[removed_worker_id] = -1;
 
 		priv->num_workers--;
 		if (worker_state == NG_PPPOE_LB_WORKER_ACTIVE)
 			priv->num_workers_active--;
 		else if (worker_state == NG_PPPOE_LB_WORKER_DRAINING)
 			priv->num_workers_draining--;
+		else if (worker_state == NG_PPPOE_LB_WORKER_PENDING_REMOVAL)
+			priv->num_pending_removals--;
+
+		priv->worker_states[removed_worker_id] = NG_PPPOE_LB_WORKER_REMOVED;
 	}
 	mtx_unlock(&priv->mtx);
 
@@ -999,7 +1119,7 @@ ng_pppoe_lb_select_worker_discovery(struct ng_pppoe_lb_private *priv)
 	/* Find next ACTIVE worker */
 	count = 0;
 	while (count < priv->num_workers) {
-		if (priv->workers[idx].state == NG_PPPOE_LB_WORKER_ACTIVE) {
+		if (priv->worker_states[priv->workers[idx].worker_id] == NG_PPPOE_LB_WORKER_ACTIVE) {
 			active_count++;
 			if (active_count > 1)
 				break;  /* Found the next active worker */
@@ -1017,7 +1137,7 @@ ng_pppoe_lb_select_worker_discovery(struct ng_pppoe_lb_private *priv)
 	count = 0;
 	idx = priv->next_worker;
 	while (count < priv->num_workers) {
-		if (priv->workers[idx].state == NG_PPPOE_LB_WORKER_ACTIVE)
+		if (priv->worker_states[priv->workers[idx].worker_id] == NG_PPPOE_LB_WORKER_ACTIVE)
 			break;
 		count++;
 		idx = (idx + 1) % priv->num_workers;
@@ -1040,7 +1160,7 @@ ng_pppoe_lb_select_worker_session(struct ng_pppoe_lb_private *priv, uint16_t ses
 	if (entry != NULL) {
 		idx = entry->worker_index;
 		if (idx >= 0 && idx < priv->num_workers &&
-		    priv->workers[idx].state == NG_PPPOE_LB_WORKER_ACTIVE) {
+		    priv->worker_states[priv->workers[idx].worker_id] == NG_PPPOE_LB_WORKER_ACTIVE) {
 			entry->last_activity = time_uptime;
 			return (idx);
 		}
@@ -1056,11 +1176,11 @@ ng_pppoe_lb_select_worker_session(struct ng_pppoe_lb_private *priv, uint16_t ses
 	idx = session_id % priv->num_workers;
 
 	/* Check if this worker is active */
-	if (priv->workers[idx].state != NG_PPPOE_LB_WORKER_ACTIVE) {
+	if (priv->worker_states[priv->workers[idx].worker_id] != NG_PPPOE_LB_WORKER_ACTIVE) {
 		/* Find the nearest active worker */
 		int i, found_idx = -1;
 		for (i = 0; i < priv->num_workers; i++) {
-			if (priv->workers[i].state == NG_PPPOE_LB_WORKER_ACTIVE) {
+			if (priv->worker_states[priv->workers[i].worker_id] == NG_PPPOE_LB_WORKER_ACTIVE) {
 				found_idx = i;
 				break;
 			}
@@ -1196,34 +1316,37 @@ ng_pppoe_lb_governor_tick(void *arg)
 	ng_pppoe_lb_governor_sessions = priv->sess_count;
 
 	/* Check for pending removal timeout - promote to PENDING_REMOVAL if drained */
-	if (priv->pending_removal_id >= 0 && priv->pending_removal_id < priv->num_workers) {
-		struct ng_pppoe_lb_worker *worker = &priv->workers[priv->pending_removal_id];
-		if (worker->state == NG_PPPOE_LB_WORKER_DRAINING &&
-		    now - worker->drain_start_time >= ng_pppoe_lb_governor_drain_timeout) {
-			if (worker->sessions == 0) {
-				/* Successfully drained - mark for removal */
-				worker->state = NG_PPPOE_LB_WORKER_PENDING_REMOVAL;
-				priv->num_workers_draining--;
-				priv->num_pending_removals++;
-				priv->pending_removal_id = -1;
-				ng_pppoe_lb_governor_last_decision = NG_PPPOE_LB_GOV_DECISION_SCALE_DOWN;
-				ng_pppoe_lb_governor_last_reason = NG_PPPOE_LB_GOV_REASON_CPU_LOW;
-				if (priv->debug_level >= 1) {
-					printf("ng_pppoe_lb: worker %d drained successfully, "
-					    "marked for removal\n", priv->pending_removal_id);
-				}
-			} else {
-				/* Couldn't drain in time - cancel removal */
-				worker->state = NG_PPPOE_LB_WORKER_ACTIVE;
-				priv->num_workers_draining--;
-				priv->num_workers_active++;
-				priv->pending_removal_id = -1;
-				ng_pppoe_lb_governor_last_decision = NG_PPPOE_LB_GOV_DECISION_CANCEL_DOWN;
-				ng_pppoe_lb_governor_last_reason = NG_PPPOE_LB_GOV_REASON_SESS_HIGH;
-				if (priv->debug_level >= 1) {
-					printf("ng_pppoe_lb: worker %d drain timeout, "
-					    "returning to ACTIVE (%u sessions remaining)\n",
-					    priv->pending_removal_id, worker->sessions);
+	if (priv->pending_removal_id >= 0) {
+		int widx = priv->worker_id_to_idx[priv->pending_removal_id];
+		if (widx >= 0 && widx < priv->num_workers) {
+			struct ng_pppoe_lb_worker *worker = &priv->workers[widx];
+			if (worker->state == NG_PPPOE_LB_WORKER_DRAINING &&
+			    now - worker->drain_start_time >= ng_pppoe_lb_governor_drain_timeout) {
+				if (worker->sessions == 0) {
+					worker->state = NG_PPPOE_LB_WORKER_PENDING_REMOVAL;
+					priv->worker_states[worker->worker_id] = NG_PPPOE_LB_WORKER_PENDING_REMOVAL;
+					priv->num_workers_draining--;
+					priv->num_pending_removals++;
+					priv->pending_removal_id = -1;
+					ng_pppoe_lb_governor_last_decision = NG_PPPOE_LB_GOV_DECISION_SCALE_DOWN;
+					ng_pppoe_lb_governor_last_reason = NG_PPPOE_LB_GOV_REASON_CPU_LOW;
+					if (priv->debug_level >= 1) {
+						printf("ng_pppoe_lb: worker %d drained successfully, "
+						    "marked for removal\n", worker->worker_id);
+					}
+				} else {
+					worker->state = NG_PPPOE_LB_WORKER_ACTIVE;
+					priv->worker_states[worker->worker_id] = NG_PPPOE_LB_WORKER_ACTIVE;
+					priv->num_workers_draining--;
+					priv->num_workers_active++;
+					priv->pending_removal_id = -1;
+					ng_pppoe_lb_governor_last_decision = NG_PPPOE_LB_GOV_DECISION_CANCEL_DOWN;
+					ng_pppoe_lb_governor_last_reason = NG_PPPOE_LB_GOV_REASON_SESS_HIGH;
+					if (priv->debug_level >= 1) {
+						printf("ng_pppoe_lb: worker %d drain timeout, "
+						    "returning to ACTIVE (%u sessions remaining)\n",
+						    worker->worker_id, worker->sessions);
+					}
 				}
 			}
 		}
@@ -1232,18 +1355,18 @@ ng_pppoe_lb_governor_tick(void *arg)
 	/* Check if any DRAINING worker received a new session - cancel its drain */
 	for (i = 0; i < priv->num_workers; i++) {
 		struct ng_pppoe_lb_worker *worker = &priv->workers[i];
-		if (worker->state == NG_PPPOE_LB_WORKER_DRAINING && worker->sessions > 0) {
-			/* New session assigned - cancel drain */
+		if (priv->worker_states[worker->worker_id] == NG_PPPOE_LB_WORKER_DRAINING && worker->sessions > 0) {
 			worker->state = NG_PPPOE_LB_WORKER_ACTIVE;
+			priv->worker_states[worker->worker_id] = NG_PPPOE_LB_WORKER_ACTIVE;
 			priv->num_workers_draining--;
 			priv->num_workers_active++;
-			if (priv->pending_removal_id == i)
+			if (priv->pending_removal_id == worker->worker_id)
 				priv->pending_removal_id = -1;
 			ng_pppoe_lb_governor_last_decision = NG_PPPOE_LB_GOV_DECISION_CANCEL_DOWN;
 			ng_pppoe_lb_governor_last_reason = NG_PPPOE_LB_GOV_REASON_SESS_HIGH;
 			if (priv->debug_level >= 1) {
 				printf("ng_pppoe_lb: worker %d received new session, "
-				    "canceling drain\n", i);
+				    "canceling drain\n", worker->worker_id);
 			}
 		}
 	}
@@ -1275,17 +1398,21 @@ ng_pppoe_lb_governor_tick(void *arg)
 
 			/* "CHANGE MIND" LOGIC: Cancel any pending removal if we need to scale up */
 			if (priv->pending_removal_id >= 0) {
-				struct ng_pppoe_lb_worker *worker = &priv->workers[priv->pending_removal_id];
-				worker->state = NG_PPPOE_LB_WORKER_ACTIVE;
-				priv->num_workers_draining--;
-				priv->num_workers_active++;
-				priv->pending_removal_id = -1;
-				ng_pppoe_lb_governor_last_decision = NG_PPPOE_LB_GOV_DECISION_CANCEL_DOWN;
-				ng_pppoe_lb_governor_last_reason = NG_PPPOE_LB_GOV_REASON_CPU_HIGH;
-				if (priv->debug_level >= 1) {
-					printf("ng_pppoe_lb: governor canceled pending removal "
-					    "of worker %d (change mind - scale up needed)\n",
-					    priv->pending_removal_id);
+				int widx = priv->worker_id_to_idx[priv->pending_removal_id];
+				if (widx >= 0 && widx < priv->num_workers) {
+					struct ng_pppoe_lb_worker *worker = &priv->workers[widx];
+					worker->state = NG_PPPOE_LB_WORKER_ACTIVE;
+					priv->worker_states[worker->worker_id] = NG_PPPOE_LB_WORKER_ACTIVE;
+					priv->num_workers_draining--;
+					priv->num_workers_active++;
+					priv->pending_removal_id = -1;
+					ng_pppoe_lb_governor_last_decision = NG_PPPOE_LB_GOV_DECISION_CANCEL_DOWN;
+					ng_pppoe_lb_governor_last_reason = NG_PPPOE_LB_GOV_REASON_CPU_HIGH;
+					if (priv->debug_level >= 1) {
+						printf("ng_pppoe_lb: governor canceled pending removal "
+						    "of worker %d (change mind - scale up needed)\n",
+						    worker->worker_id);
+					}
 				}
 			}
 
@@ -1319,7 +1446,7 @@ ng_pppoe_lb_governor_tick(void *arg)
 		int min_sess = INT_MAX;
 		int drain_worker = -1;
 		for (i = 0; i < priv->num_workers; i++) {
-			if (priv->workers[i].state == NG_PPPOE_LB_WORKER_ACTIVE &&
+			if (priv->worker_states[priv->workers[i].worker_id] == NG_PPPOE_LB_WORKER_ACTIVE &&
 			    (int)priv->workers[i].sessions < min_sess) {
 				min_sess = priv->workers[i].sessions;
 				drain_worker = i;
@@ -1328,18 +1455,18 @@ ng_pppoe_lb_governor_tick(void *arg)
 
 		if (drain_worker >= 0) {
 			struct ng_pppoe_lb_worker *worker = &priv->workers[drain_worker];
-			worker->state = NG_PPPOE_LB_WORKER_DRAINING;
+			priv->worker_states[worker->worker_id] = NG_PPPOE_LB_WORKER_DRAINING;
 			worker->drain_start_time = now;
 			priv->num_workers_active--;
 			priv->num_workers_draining++;
-			priv->pending_removal_id = drain_worker;
+			priv->pending_removal_id = worker->worker_id;
 			priv->last_scale_down = now;
 			ng_pppoe_lb_governor_last_decision = NG_PPPOE_LB_GOV_DECISION_SCALE_DOWN;
 			ng_pppoe_lb_governor_last_reason = NG_PPPOE_LB_GOV_REASON_CPU_LOW;
 			if (priv->debug_level >= 1) {
 				printf("ng_pppoe_lb: governor marking worker %d for drain "
 				    "(CPU=%d%%, sess=%u, drain_timeout=%ds)\n",
-				    drain_worker, avg_cpu, worker->sessions,
+				    worker->worker_id, avg_cpu, worker->sessions,
 				    ng_pppoe_lb_governor_drain_timeout);
 			}
 		}

@@ -297,6 +297,66 @@ governor_cancel_drain(int worker_id)
 	return (0);
 }
 
+static void
+governor_handle_pending_removals(void)
+{
+	struct ng_pppoe_lb_get_workers_by_state req;
+	struct ngm_rmhook rmh;
+	char rbuf[1024];
+	struct ng_mesg *resp = (struct ng_mesg *)rbuf;
+	int32_t *worker_ids;
+	int i, count;
+
+	req.state = NG_PPPOE_LB_WORKER_PENDING_REMOVAL;
+	req.max_count = 64;
+
+	if (NgSendMsg(cs_fd, lb_path, NGM_PPPOE_LB_COOKIE,
+	    NGM_PPPOE_LB_GET_WORKERS_BY_STATE, &req, sizeof(req)) < 0)
+		return;
+
+	if (NgRecvMsg(cs_fd, resp, sizeof(rbuf), NULL) <= 0)
+		return;
+
+	if (resp->header.typecookie != NGM_PPPOE_LB_COOKIE ||
+	    resp->header.cmd != NGM_PPPOE_LB_GET_WORKERS_BY_STATE)
+		return;
+
+	count = (resp->header.arglen - sizeof(*resp)) / sizeof(int32_t);
+	if (count <= 0)
+		return;
+
+	worker_ids = (int32_t *)resp->data;
+
+	for (i = 0; i < count; i++) {
+		struct ng_pppoe_lb_get_worker_info winfo_req;
+		struct ng_pppoe_lb_worker_info *winfo;
+
+		winfo_req.worker_id = worker_ids[i];
+		if (NgSendMsg(cs_fd, lb_path, NGM_PPPOE_LB_COOKIE,
+		    NGM_PPPOE_LB_GET_WORKER_INFO, &winfo_req, sizeof(winfo_req)) < 0)
+			continue;
+
+		if (NgRecvMsg(cs_fd, resp, sizeof(rbuf), NULL) <= 0)
+			continue;
+
+		if (resp->header.typecookie != NGM_PPPOE_LB_COOKIE ||
+		    resp->header.cmd != NGM_PPPOE_LB_GET_WORKER_INFO)
+			continue;
+
+		winfo = (struct ng_pppoe_lb_worker_info *)resp->data;
+
+		snprintf(rmh.ourhook, sizeof(rmh.ourhook), "%s", winfo->hook_name);
+		if (NgSendMsg(cs_fd, lb_path, NGM_GENERIC_COOKIE,
+		    NGM_RMHOOK, &rmh, sizeof(rmh)) < 0) {
+			syslog(LOG_ERR,
+			    "governor: failed to remove worker %d: %m", winfo->worker_id);
+		} else {
+			syslog(LOG_INFO,
+			    "governor: removed worker %d", winfo->worker_id);
+		}
+	}
+}
+
 /* Find worker with fewest sessions for removal */
 static int
 governor_find_worker_to_remove(void)
@@ -501,6 +561,10 @@ governor_thread_main(void *arg)
 
 		if (!governor_running)
 			break;
+
+		governor_update_state();
+		if (governor_state.pending_removals > 0)
+			governor_handle_pending_removals();
 
 		/* Only poll if governor is enabled */
 		pthread_mutex_lock(&governor_state.lock);
@@ -1367,7 +1431,7 @@ main(int argc, char *argv[])
 
   /* Build load balancer path for governor */
   if (optL) {
-    snprintf(lbpath, sizeof(lbpath), "%s%s", argv[optind], NG_ETHER_HOOK_ORPHAN);
+    snprintf(lbpath, sizeof(lbpath), "%s:%s", argv[optind], NG_ETHER_HOOK_ORPHAN);
   }
 
   if (!optF && daemon(1, 0) == -1) {

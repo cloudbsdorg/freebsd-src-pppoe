@@ -52,12 +52,14 @@
 enum {
 	NGM_PPPOE_LB_ADD_WORKER = 1,
 	NGM_PPPOE_LB_REMOVE_WORKER,
+	NGM_PPPOE_LB_REMOVE_WORKER_BY_ID,
 	NGM_PPPOE_LB_SET_CONFIG,
 	NGM_PPPOE_LB_GET_STATS,
 	NGM_PPPOE_LB_GET_MAP,
-	NGM_PPPOE_LB_SET_WORKER_STATE,		/* Set individual worker state */
-	NGM_PPPOE_LB_GET_WORKER_INFO,		/* Get individual worker info */
-	NGM_PPPOE_LB_TRIGGER_SCALE,		/* Trigger scale event for testing */
+	NGM_PPPOE_LB_SET_WORKER_STATE,
+	NGM_PPPOE_LB_GET_WORKER_INFO,
+	NGM_PPPOE_LB_GET_WORKERS_BY_STATE,
+	NGM_PPPOE_LB_TRIGGER_SCALE,
 };
 
 /* Load balancing algorithms */
@@ -127,6 +129,7 @@ struct ng_pppoe_lb_worker_info {
 	uint64_t	packets_out;		/* Packets sent */
 	uint64_t	bytes_in;		/* Bytes received */
 	uint64_t	bytes_out;		/* Bytes sent */
+	char		hook_name[32];
 };
 
 /* Set worker state message */
@@ -138,6 +141,11 @@ struct ng_pppoe_lb_set_worker_state {
 /* Get worker info message */
 struct ng_pppoe_lb_get_worker_info {
 	int32_t		worker_id;		/* Worker index */
+};
+
+struct ng_pppoe_lb_get_workers_by_state {
+	uint32_t	state;
+	uint32_t	max_count;
 };
 
 /* Trigger scale message (for testing) */
