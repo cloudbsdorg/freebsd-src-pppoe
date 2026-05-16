@@ -727,13 +727,8 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 
 	case NGM_ETHER_COOKIE:
 		if (msg->header.cmd == NGM_ETHER_GET_ENADDR) {
-			if (priv->ether_hook == NULL) {
-				error = ENOTCONN;
-				break;
-			}
-			NG_SEND_MSG_HOOK(error, node, item,
-			    priv->ether_hook, NG_NODE_ID(node), 0);
-			return (error);
+			error = ENOTCONN;
+			break;
 		}
 		error = EINVAL;
 		break;
