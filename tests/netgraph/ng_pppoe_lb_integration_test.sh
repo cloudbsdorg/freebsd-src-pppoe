@@ -132,10 +132,9 @@ log_subsection() {
 
 # Print test header
 test_header() {
-    TESTS_RUN=$((TESTS_RUN + 1))
     if [ "$VERBOSE" = "true" ]; then
         echo ""
-        echo "${BOLD}[TEST $TESTS_RUN]${NC} $*"
+        echo "${BOLD}[TEST $*]${NC}"
     fi
 }
 
