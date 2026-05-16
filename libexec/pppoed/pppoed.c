@@ -723,7 +723,7 @@ ConfigureNode(const char *prog, const char *iface, const char *provider,
     return EX_DATAERR;
   }
 
-  if (use_load_balancer && num_workers > 1) {
+  if (num_workers > 1) {
     /*
      * Multi-threaded mode: Create load balancer and workers
      */
