@@ -291,21 +291,38 @@ create_node() {
     local name="$1"
     log_info "Creating netgraph node: $name"
 
-    # Create a new netgraph node
-    # Hook name on new node MUST be "ether" (NG_PPPOE_LB_HOOK_ETHER).
-    ngctl mkpeer . pppoe_lb ether ether || {
-        log_error "Failed to create node: $name"
+    # Load ng_ether to make interfaces available as netgraph nodes
+    kldload ng_ether >/dev/null 2>&1 || true
+
+    # Find or create an ether-type parent node
+    local parent=""
+    for iface in $(ifconfig -l ether 2>/dev/null | tr ' ' '\n' | grep -E '^(epair|tap)[0-9]+' | head -1); do
+        if ngctl list 2>/dev/null | grep -q "^  Name: $iface "; then
+            parent="$iface"
+            break
+        fi
+    done
+
+    # If no existing interface, create an epair
+    if [ -z "$parent" ]; then
+        local epair=$(ifconfig epair create 2>/dev/null | head -1)
+        if [ -n "$epair" ]; then
+            parent="$epair"
+        fi
+    fi
+
+    if [ -z "$parent" ]; then
+        log_error "No suitable parent interface found"
+        return 1
+    fi
+
+    # Create pppoe_lb node with worker hook on parent
+    ngctl mkpeer "${parent}:" pppoe_lb ether worker || {
+        log_error "Failed to create node: $name (mkpeer failed)"
         return 1
     }
 
-    # Wait for node to be ready
     sleep 0.5
-
-    ngctl name ether: "$name" || {
-        log_error "Failed to name node: $name"
-        ngctl shutdown ether: 2>/dev/null
-        return 1
-    }
 
     log_pass "Node created: $name"
     return 0
