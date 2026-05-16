@@ -927,7 +927,6 @@ test_ngctl_commands() {
 # ============================================================================
 
 run_all_tests() {
-    echo "1..25"
     log_section "Running PPPoE Load Balancer Unit Tests"
     log_info "Test mode: $([ "$QUICK_MODE" = "1" ] && echo "Quick" || echo "Full")"
     log_info "Verbose: $([ "$VERBOSE" = "1" ] && echo "Yes" || echo "No")"
@@ -965,6 +964,7 @@ run_all_tests() {
 }
 
 print_summary() {
+    echo "1..$TESTS_RUN"
     log_section "Test Summary"
     echo ""
     echo "  Tests Run:    $TESTS_RUN"
@@ -972,7 +972,7 @@ print_summary() {
     echo "  Failed:       ${RED}$TESTS_FAILED${NC}"
     echo "  Skipped:      ${YELLOW}$TESTS_SKIPPED${NC}"
     echo ""
-    
+
     if [ $TESTS_FAILED -gt 0 ]; then
         echo "${RED}RESULT: FAILED${NC}"
         echo ""
