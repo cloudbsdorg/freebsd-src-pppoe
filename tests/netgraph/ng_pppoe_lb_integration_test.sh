@@ -93,12 +93,14 @@ log_error() {
 }
 
 log_pass() {
+    TESTS_RUN=$((TESTS_RUN + 1))
     echo "ok $TESTS_RUN - $*"
     echo "${GREEN}[PASS]${NC} $*"
     TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
 log_fail() {
+    TESTS_RUN=$((TESTS_RUN + 1))
     echo "not ok $TESTS_RUN - $*"
     echo "${RED}[FAIL]${NC} $*"
     TESTS_FAILED=$((TESTS_FAILED + 1))
@@ -110,6 +112,7 @@ log_fail() {
 }
 
 log_skip() {
+    TESTS_RUN=$((TESTS_RUN + 1))
     echo "ok $TESTS_RUN - $* # skip"
     echo "${CYAN}[SKIP]${NC} $*"
     TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
@@ -148,7 +151,7 @@ test_result() {
     if [ "$status" = "PASS" ]; then
         TESTS_PASSED=$((TESTS_PASSED + 1))
         echo "ok $TESTS_RUN - $expected"
-        log_pass "Test $TESTS_RUN: $expected"
+        echo "${GREEN}[PASS]${NC} Test $TESTS_RUN: $expected"
         if [ "$VERBOSE" = "true" ] && [ -n "$actual" ]; then
             echo "    Expected: $expected"
             echo "    Actual:   $actual"
@@ -156,17 +159,20 @@ test_result() {
     elif [ "$status" = "SKIP" ]; then
         TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
         echo "ok $TESTS_RUN - $expected # skip"
-        if [ "$VERBOSE" = "true" ]; then
-            log_skip "Test $TESTS_RUN: $expected"
-        fi
+        echo "${CYAN}[SKIP]${NC} Test $TESTS_RUN: $expected"
     else
         TESTS_FAILED=$((TESTS_FAILED + 1))
         echo "not ok $TESTS_RUN - $expected"
-        log_fail "Test $TESTS_RUN: $expected"
+        echo "${RED}[FAIL]${NC} Test $TESTS_RUN: $expected"
         echo "    Expected: $expected"
         echo "    Actual:   $actual"
         if [ -n "$details" ]; then
             echo "    Details:  $details"
+        fi
+        if [ "$STOP_ON_FAIL" = "true" ]; then
+            log_error "Stopping on failure as requested"
+            cleanup_all
+            exit 1
         fi
     fi
 }
