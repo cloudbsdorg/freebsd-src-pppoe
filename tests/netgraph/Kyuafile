@@ -93,3 +93,12 @@ tap_test_program{
     required_user = "root",
     timeout = 300,
 }
+
+-- Fuzz tests
+tap_test_program{
+    name = "ng_pppoe_lb_fuzz_test.sh",
+    description = "Fuzzing tests for robustness testing",
+    is_exclusive = true,
+    required_user = "root",
+    timeout = 600,
+}
