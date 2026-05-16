@@ -380,7 +380,7 @@ test_kern_03_session_routing_rr() {
     
     # Check distribution (this is a basic check - real session routing
     # requires actual PPPoE traffic)
-    TOTAL_SESSIONS=$(sysctl -n ${SYSCTL_PREFIX}.governor.total_sessions 2>/dev/null || echo "0")
+    TOTAL_SESSIONS=$(sysctl -n ${SYSCTL_PREFIX}.governor.sessions 2>/dev/null || echo "0")
     CURRENT_WORKERS=$(sysctl -n ${SYSCTL_PREFIX}.governor.current_workers 2>/dev/null || echo "1")
     
     log_verbose "Sessions: $TOTAL_SESSIONS, Workers: $CURRENT_WORKERS"
@@ -740,7 +740,7 @@ test_kern_14_cleanup() {
     fi
     
     # Get session count before cleanup
-    SESSIONS_BEFORE=$(sysctl -n ${SYSCTL_PREFIX}.governor.total_sessions 2>/dev/null || echo "0")
+    SESSIONS_BEFORE=$(sysctl -n ${SYSCTL_PREFIX}.governor.sessions 2>/dev/null || echo "0")
     
     # Cleanup
     cleanup_topology
@@ -808,12 +808,12 @@ test_sysctl_read_write() {
         record_fail "SYS-03: Cannot read draining_workers"
     fi
     
-    # SYS-04: Read total_sessions
-    SESSIONS=$(sysctl -n ${SYSCTL_PREFIX}.governor.total_sessions 2>/dev/null)
+    # SYS-04: Read sessions
+    SESSIONS=$(sysctl -n ${SYSCTL_PREFIX}.governor.sessions 2>/dev/null)
     if [ -n "$SESSIONS" ]; then
-        record_pass "SYS-04: Read total_sessions = $SESSIONS"
+        record_pass "SYS-04: Read sessions = $SESSIONS"
     else
-        record_fail "SYS-04: Cannot read total_sessions"
+        record_fail "SYS-04: Cannot read sessions"
     fi
     
     # SYS-05: Write min_workers
