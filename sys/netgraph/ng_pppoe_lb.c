@@ -726,22 +726,13 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 		break;
 
 	case NGM_ETHER_COOKIE:
-		printf("ng_pppoe_lb: got NGM_ETHER_COOKIE cmd=%d\n", msg->header.cmd);
-		/*
-		 * Forward NGM_ETHER_GET_ENADDR to our ether hook (vtnet0).
-		 * This is needed because pppoe nodes expect to be directly
-		 * connected to an ether node and ask for the MAC address
-		 * during connect. We proxy the request.
-		 */
 		if (msg->header.cmd == NGM_ETHER_GET_ENADDR) {
-			printf("ng_pppoe_lb: forwarding GET_ENADDR to ether hook\n");
 			if (priv->ether_hook == NULL) {
 				error = ENOTCONN;
 				break;
 			}
-			/* Forward to ether node, with our node as return address */
-			NG_FWD_MSG_HOOK(error, node, item,
-			    priv->ether_hook, NG_NODE_ID(node));
+			NG_SEND_MSG_HOOK(error, node, item,
+			    priv->ether_hook, NG_NODE_ID(node), 0);
 			return (error);
 		}
 		error = EINVAL;
@@ -807,7 +798,7 @@ ng_pppoe_lb_newhook(node_p node, hook_p hook, const char *name)
 	struct ng_pppoe_lb_private *priv;
 
 	priv = GET_NODE_PRIV(node);
-	printf("ng_pppoe_lb_newhook: node=%p, hook=%p, name='%s'\n", node, hook, name);
+	printf("ng_pppoe_lb_newhook: START node=%p hook=%p name='%s'\n", node, hook, name);
 
 	if (strcmp(name, NG_PPPOE_LB_HOOK_ETHER) == 0) {
 		if (priv->ether_hook != NULL)
