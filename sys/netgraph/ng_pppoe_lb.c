@@ -446,11 +446,8 @@ ng_pppoe_lb_constructor(node_p node)
 	priv->pending_removal_id = -1;
 	priv->scale_event_cpu = 0;
 
-	/* Initialize governor callout */
 	callout_init(&priv->governor_callout, CALLOUT_MPSAFE);
-	if (ng_pppoe_lb_governor_enabled) {
-		callout_reset(&priv->governor_callout, hz, ng_pppoe_lb_governor_tick, priv);
-	}
+	callout_reset(&priv->governor_callout, hz, ng_pppoe_lb_governor_tick, priv);
 
 	NG_NODE_SET_PRIVATE(node, priv);
 	NG_NODE_REF(node);  /* Reference for private data */
