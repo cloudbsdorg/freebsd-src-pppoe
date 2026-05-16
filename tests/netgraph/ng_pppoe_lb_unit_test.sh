@@ -155,12 +155,18 @@ check_root() {
 # Load required kernel modules
 load_modules() {
     log_info "Loading kernel modules..."
-    
+
+    # Check if module already loaded
+    if kldstat -n ng_pppoe_lb >/dev/null 2>&1; then
+        log_info "ng_pppoe_lb module already loaded"
+        return 0
+    fi
+
     # Load netgraph and dependencies
     kldload netgraph 2>/dev/null || true
     kldload ng_ether 2>/dev/null || true
     kldload ng_pppoe 2>/dev/null || true
-    
+
     # Load our module
     if ! kldload ng_pppoe_lb 2>/dev/null; then
         # Try from current directory if module not installed
@@ -173,13 +179,13 @@ load_modules() {
             exit 2
         fi
     fi
-    
+
     # Verify module loaded
     if ! kldstat -n ng_pppoe_lb >/dev/null 2>&1; then
         log_error "ng_pppoe_lb module not loaded"
         exit 2
     fi
-    
+
     log_info "Kernel modules loaded successfully"
 }
 
