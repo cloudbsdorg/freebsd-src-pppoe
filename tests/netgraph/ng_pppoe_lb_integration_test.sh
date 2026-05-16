@@ -290,9 +290,11 @@ sysctl_exists() {
 create_node() {
     local name="$1"
     log_info "Creating netgraph node: $name"
-    
+
     # Create a new netgraph node
-    ngctl mkpeer . pppoe_lb lb "$name" || {
+    # NOTE: The hook name MUST be "ether" (NG_PPPOE_LB_HOOK_ETHER).
+    # Other hook names like "lb" are rejected by the module.
+    ngctl mkpeer . pppoe_lb ether "$name" || {
         log_error "Failed to create node: $name"
         return 1
     }

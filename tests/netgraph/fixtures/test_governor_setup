@@ -26,7 +26,8 @@ PREFIX="net.graph.pppoe_lb"
 echo "Setting up governor-enabled PPPoE LB fixture..."
 
 # Create the netgraph node
-ngctl mkpeer . pppoe_lb lb "$NODE_NAME"
+# Hook name MUST be "ether" (NG_PPPOE_LB_HOOK_ETHER)
+ngctl mkpeer . pppoe_lb ether "$NODE_NAME"
 
 # Wait for node to be ready
 sleep 0.5

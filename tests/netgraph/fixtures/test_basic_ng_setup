@@ -24,7 +24,8 @@ NODE_NAME="${1:-pppoe_lb_test}"
 echo "Setting up basic netgraph PPPoE LB fixture..."
 
 # Create the netgraph node
-ngctl mkpeer . pppoe_lb lb "$NODE_NAME"
+# Hook name MUST be "ether" (NG_PPPOE_LB_HOOK_ETHER)
+ngctl mkpeer . pppoe_lb ether "$NODE_NAME"
 
 # Wait for node to be ready
 sleep 0.5
