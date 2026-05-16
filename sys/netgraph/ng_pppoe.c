@@ -672,8 +672,10 @@ ng_pppoe_constructor(node_p node)
 	priv_p	privp;
 	int	i;
 
+	printf("ng_pppoe_constructor: START node=%p\n", node);
 	/* Initialize private descriptor. */
 	privp = malloc(sizeof(*privp), M_NETGRAPH_PPPOE, M_WAITOK | M_ZERO);
+	printf("ng_pppoe_constructor: malloc done\n");
 
 	/* Link structs together; this counts as our one reference to *node. */
 	NG_NODE_SET_PRIVATE(node, privp);
@@ -710,6 +712,7 @@ ng_pppoe_newhook(node_p node, hook_p hook, const char *name)
 	const priv_p privp = NG_NODE_PRIVATE(node);
 	sessp sp;
 
+	printf("ng_pppoe_newhook: START node=%p hook=%p name='%s'\n", node, hook, name);
 	if (strcmp(name, NG_PPPOE_HOOK_ETHERNET) == 0) {
 		privp->ethernet_hook = hook;
 		NG_HOOK_SET_RCVDATA(hook, ng_pppoe_rcvdata_ether);
@@ -746,6 +749,7 @@ ng_pppoe_connect(hook_p hook)
 	struct ng_mesg *msg;
 	int error;
 
+	printf("ng_pppoe_connect: START hook=%p\n", hook);
 	if (hook != privp->ethernet_hook)
 		return (0);
 
