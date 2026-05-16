@@ -100,16 +100,20 @@ check_vm_environment() {
 # Load required kernel modules
 load_modules() {
     log_info "Loading kernel modules..."
-    
-    # Load netgraph and dependencies
-    kldload netgraph 2>/dev/null || true
-    kldload ng_ether 2>/dev/null || true
-    kldload ng_pppoe 2>/dev/null || true
-    kldload ng_pppoe_lb 2>/dev/null || {
-        log_error "Failed to load ng_pppoe_lb module"
-        return 1
-    }
-    
+
+    # Check if already loaded
+    if kldstat -n ng_pppoe_lb >/dev/null 2>&1; then
+        log_info "ng_pppoe_lb module already loaded"
+    else
+        kldload netgraph 2>/dev/null || true
+        kldload ng_ether 2>/dev/null || true
+        kldload ng_pppoe 2>/dev/null || true
+        kldload ng_pppoe_lb 2>/dev/null || {
+            log_error "Failed to load ng_pppoe_lb module"
+            return 1
+        }
+    fi
+
     log_success "Kernel modules loaded"
 }
 
