@@ -925,7 +925,7 @@ main() {
     check_modules
     
     # Setup cleanup trap
-    trap cleanup_all EXIT
+    trap 'print_summary; cleanup_all' EXIT
     
     # Print banner
     print_banner
