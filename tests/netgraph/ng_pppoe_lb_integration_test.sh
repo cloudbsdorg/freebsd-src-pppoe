@@ -93,11 +93,13 @@ log_error() {
 }
 
 log_pass() {
+    echo "ok $TESTS_RUN - $*"
     echo "${GREEN}[PASS]${NC} $*"
     TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
 log_fail() {
+    echo "not ok $TESTS_RUN - $*"
     echo "${RED}[FAIL]${NC} $*"
     TESTS_FAILED=$((TESTS_FAILED + 1))
     if [ "$STOP_ON_FAIL" = "true" ]; then
@@ -108,6 +110,7 @@ log_fail() {
 }
 
 log_skip() {
+    echo "ok $TESTS_RUN - $* # skip"
     echo "${CYAN}[SKIP]${NC} $*"
     TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
 }
@@ -837,15 +840,16 @@ print_banner() {
 }
 
 print_summary() {
+    echo "1..$TESTS_RUN"
     log_section "Test Summary"
-    
+
     echo ""
     echo "  Tests Run:    $TESTS_RUN"
     echo "  Tests Passed: ${GREEN}$TESTS_PASSED${NC}"
     echo "  Tests Failed: ${RED}$TESTS_FAILED${NC}"
     echo "  Tests Skipped: ${CYAN}$TESTS_SKIPPED${NC}"
     echo ""
-    
+
     if [ "$TESTS_FAILED" -eq 0 ]; then
         echo "${GREEN}${BOLD}ALL TESTS PASSED${NC}"
         echo ""

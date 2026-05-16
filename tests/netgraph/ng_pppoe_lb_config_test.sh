@@ -82,16 +82,19 @@ log_verbose(){ [ "$VERBOSE" = "1" ] && echo "${CYAN}[VERB]${NC} $*" || true; }
 
 record_pass() {
     TESTS_RUN=$((TESTS_RUN + 1)); TESTS_PASSED=$((TESTS_PASSED + 1))
+    echo "ok $TESTS_RUN - $1"
     log_success "Test $TESTS_RUN: $1"
 }
 
 record_fail() {
     TESTS_RUN=$((TESTS_RUN + 1)); TESTS_FAILED=$((TESTS_FAILED + 1))
+    echo "not ok $TESTS_RUN - $1"
     log_fail "Test $TESTS_RUN: $1"
 }
 
 record_skip() {
     TESTS_RUN=$((TESTS_RUN + 1)); TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+    echo "ok $TESTS_RUN - $1 # skip"
     log_skip "Test $TESTS_RUN: $1 (skipped)"
 }
 
@@ -114,6 +117,9 @@ cleanup_test_dir() {
 }
 
 load_module() {
+    if kldstat -n ng_pppoe_lb >/dev/null 2>&1; then
+        return 0
+    fi
     if ! kldload ng_pppoe_lb 2>/dev/null; then
         if [ -f "/boot/kernel/ng_pppoe_lb.ko" ]; then
             kldload /boot/kernel/ng_pppoe_lb.ko
@@ -616,6 +622,7 @@ main() {
     test_governor_config_sysctls || true
     
     # Summary
+    echo "1..$TESTS_RUN"
     log_section "Configuration Test Summary"
     echo ""
     echo "  Tests Run:    $TESTS_RUN"
