@@ -12,7 +12,7 @@
 set -e
 
 # Configuration
-SYSCTL_PREFIX="net.graph.pppoe.lb"
+SYSCTL_PREFIX="net.graph.pppoe_lb"
 NUM_WORKERS=4
 
 ITERATIONS="${ITERATIONS:-1000}"
