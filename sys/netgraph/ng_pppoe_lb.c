@@ -320,6 +320,7 @@ static struct ng_pppoe_lb_sess_entry *ng_pppoe_lb_find_session(struct ng_pppoe_l
 static int ng_pppoe_lb_add_session(struct ng_pppoe_lb_private *priv, uint16_t session_id, int worker_index);
 static int ng_pppoe_lb_remove_session(struct ng_pppoe_lb_private *priv, uint16_t session_id);
 static void ng_pppoe_lb_governor_tick(void *arg);
+static int ng_pppoe_lb_add_worker_internal(struct ng_pppoe_lb_private *priv, hook_p hook);
 
 /* Command list */
 static const struct ng_cmdlist ng_pppoe_lb_cmds[] = {
@@ -456,6 +457,29 @@ ng_pppoe_lb_constructor(node_p node)
 		priv->worker_id_to_idx[i] = -1;
 
 	priv->algorithm = ng_pppoe_lb_algorithm;
+
+	int initial_workers = ng_pppoe_lb_num_workers;
+	if (initial_workers > priv->max_workers)
+		initial_workers = priv->max_workers;
+	for (int i = 0; i < initial_workers; i++) {
+		priv->worker_hooks[i] = NULL;
+		priv->workers[i].worker_id = i;
+		priv->workers[i].state = NG_PPPOE_LB_WORKER_ACTIVE;
+		priv->workers[i].sessions = 0;
+		priv->workers[i].last_activity = 0;
+		priv->workers[i].start_time = time_uptime;
+		priv->workers[i].packets_in = 0;
+		priv->workers[i].packets_out = 0;
+		priv->workers[i].bytes_in = 0;
+		priv->workers[i].bytes_out = 0;
+		priv->workers[i].drain_start_time = 0;
+		priv->worker_states[i] = NG_PPPOE_LB_WORKER_ACTIVE;
+		priv->worker_id_to_idx[i] = i;
+		priv->num_workers++;
+		priv->num_workers_active++;
+	}
+	if (priv->debug_level >= 1 && priv->num_workers > 0)
+		printf("ng_pppoe_lb: created %d initial workers\n", priv->num_workers);
 	priv->debug_level = ng_pppoe_lb_debug;
 	priv->next_worker = 0;
 	priv->packets_in = 0;
@@ -490,9 +514,10 @@ ng_pppoe_lb_rcvmsg(node_p node, item_p item, hook_p lasthook)
 	switch (msg->header.typecookie) {
 	case NGM_PPPOE_LB_COOKIE:
 		switch (msg->header.cmd) {
-		case NGM_PPPOE_LB_ADD_WORKER:
-			/* Handled via newhook/connect */
+		case NGM_PPPOE_LB_ADD_WORKER: {
+			error = ng_pppoe_lb_add_worker_internal(priv, NULL);
 			break;
+		}
 
 		case NGM_PPPOE_LB_REMOVE_WORKER:
 			/* Handled via disconnect */
@@ -917,6 +942,82 @@ ng_pppoe_lb_newhook(node_p node, hook_p hook, const char *name)
 			printf("ng_pppoe_lb_newhook: rejecting invalid hook name '%s'\n", name);
 		return (EINVAL);
 	}
+
+	return (0);
+}
+
+/*
+ * Add a worker without requiring a hook connection.
+ * This is used for auto-creation of workers when num_workers is set,
+ * and for internal workers that don't need an external hook.
+ */
+static int
+ng_pppoe_lb_add_worker_internal(struct ng_pppoe_lb_private *priv, hook_p hook)
+{
+	hook_p *new_hooks;
+	struct ng_pppoe_lb_worker *new_workers;
+	uint32_t *new_states;
+	int *new_id_to_idx;
+	int idx;
+
+	/* Check if we can add more workers */
+	if (priv->num_workers >= priv->max_workers) {
+		if (priv->debug_level >= 1)
+			printf("ng_pppoe_lb: cannot add worker, max %d reached\n",
+			    priv->max_workers);
+		return (ENOSPC);
+	}
+
+	idx = priv->num_workers;
+
+	/* Reallocate worker_hooks array */
+	new_hooks = realloc(priv->worker_hooks,
+	    (idx + 1) * sizeof(*priv->worker_hooks), M_NETGRAPH, M_NOWAIT);
+	if (new_hooks == NULL)
+		return (ENOMEM);
+	priv->worker_hooks = new_hooks;
+
+	/* Reallocate workers array */
+	new_workers = realloc(priv->workers,
+	    (idx + 1) * sizeof(*priv->workers), M_NETGRAPH, M_NOWAIT);
+	if (new_workers == NULL)
+		return (ENOMEM);
+	priv->workers = new_workers;
+
+	/* Reallocate worker_states array */
+	new_states = realloc(priv->worker_states,
+	    (idx + 1) * sizeof(*priv->worker_states), M_NETGRAPH, M_NOWAIT);
+	if (new_states == NULL)
+		return (ENOMEM);
+	priv->worker_states = new_states;
+
+	/* Reallocate worker_id_to_idx array */
+	new_id_to_idx = realloc(priv->worker_id_to_idx,
+	    (idx + 1) * sizeof(*priv->worker_id_to_idx), M_NETGRAPH, M_NOWAIT);
+	if (new_id_to_idx == NULL)
+		return (ENOMEM);
+	priv->worker_id_to_idx = new_id_to_idx;
+
+	/* Initialize the new worker */
+	priv->worker_hooks[idx] = hook;
+	priv->workers[idx].worker_id = idx;
+	priv->workers[idx].state = NG_PPPOE_LB_WORKER_ACTIVE;
+	priv->workers[idx].sessions = 0;
+	priv->workers[idx].last_activity = 0;
+	priv->workers[idx].start_time = time_uptime;
+	priv->workers[idx].packets_in = 0;
+	priv->workers[idx].packets_out = 0;
+	priv->workers[idx].bytes_in = 0;
+	priv->workers[idx].bytes_out = 0;
+	priv->workers[idx].drain_start_time = 0;
+	priv->worker_states[idx] = NG_PPPOE_LB_WORKER_ACTIVE;
+	priv->worker_id_to_idx[idx] = idx;
+
+	priv->num_workers++;
+	priv->num_workers_active++;
+
+	if (priv->debug_level >= 1)
+		printf("ng_pppoe_lb: added worker %d (hook=%p)\n", idx, hook);
 
 	return (0);
 }
