@@ -1,23 +1,13 @@
 // SPDX-License-Identifier: CDDL-1.0
 /*
- * CDDL HEADER START
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
  *
- * The contents of this file are subject to the terms of the
- * Common Development and Distribution License (the "License").
- * You may not use this file except in compliance with the License.
- *
- * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or https://opensource.org/licenses/CDDL-1.0.
- * See the License for the specific language governing permissions
- * and limitations under the License.
- *
- * When distributing Covered Code, include this CDDL HEADER in each
- * file and include the License file at usr/src/OPENSOLARIS.LICENSE.
- * If applicable, add the following below this CDDL HEADER, with the
- * fields enclosed by brackets "[]" replaced with your own identifying
- * information: Portions Copyright [yyyy] [name of copyright owner]
- *
- * CDDL HEADER END
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * https://opensource.org/license/CDDL-1.0.
  */
 
 /*
@@ -363,6 +353,7 @@ typedef enum {
 /* Small enough to not hog a whole line of printout in zpool(8). */
 #define	ZPROP_MAX_COMMENT	32
 #define	ZPROP_BOOLEAN_NA	2
+#define	ZPROP_BOOLEAN_INHERIT	2
 
 #define	ZPROP_VALUE		"value"
 #define	ZPROP_SOURCE		"source"
@@ -380,6 +371,7 @@ typedef enum {
 
 #define	ZPROP_SOURCE_VAL_RECVD	"$recvd"
 #define	ZPROP_N_MORE_ERRORS	"N_MORE_ERRORS"
+#define	ZFS_RECV_ERR_STREAM	"stream"
 
 /*
  * Dataset flag implemented as a special entry in the props zap object
@@ -392,7 +384,13 @@ typedef enum {
 
 typedef enum {
 	ZPROP_ERR_NOCLEAR = 0x1, /* failure to clear existing props */
-	ZPROP_ERR_NORESTORE = 0x2 /* failure to restore props on error */
+	ZPROP_ERR_NORESTORE = 0x2, /* failure to restore props on error */
+	/*
+	 * A non-raw incremental was received onto a raw-received lineage,
+	 * diverging its IV set, so that a later raw incremental will fail with
+	 * an IV set guid mismatch (see #8758). A warning, not a property error.
+	 */
+	ZPROP_ERR_IVSET_DIVERGED = 0x4
 } zprop_errflags_t;
 
 typedef int (*zprop_func)(int, void *);
@@ -476,6 +474,8 @@ typedef enum {
 	VDEV_PROP_SCHEDULER,
 	VDEV_PROP_FDOMAIN,
 	VDEV_PROP_FGROUP,
+	VDEV_PROP_ALLOC_BIAS,
+	VDEV_PROP_ROTATIONAL,
 	VDEV_NUM_PROPS
 } vdev_prop_t;
 
@@ -490,6 +490,16 @@ typedef enum {
 	VDEV_SCHEDULER_ON,
 	VDEV_SCHEDULER_OFF
 } vdev_scheduler_type_t;
+
+/*
+ * Allocation bias for top-level vdevs (alloc_bias property).
+ */
+typedef enum vdev_alloc_bias {
+	VDEV_BIAS_NONE,
+	VDEV_BIAS_LOG,		/* dedicated to ZIL data (SLOG) */
+	VDEV_BIAS_SPECIAL,	/* dedicated to ddt, metadata, and small blks */
+	VDEV_BIAS_DEDUP		/* dedicated to dedup metadata */
+} vdev_alloc_bias_t;
 
 /*
  * Dataset property functions shared between libzfs and kernel.
@@ -857,6 +867,7 @@ typedef struct zpool_load_policy {
 #define	ZPOOL_CONFIG_CHECKPOINT_STATS	"checkpoint_stats" /* not on disk */
 #define	ZPOOL_CONFIG_RAIDZ_EXPAND_STATS	"raidz_expand_stats" /* not on disk */
 #define	ZPOOL_CONFIG_VDEV_STATS		"vdev_stats"	/* not stored on disk */
+#define	ZPOOL_CONFIG_CONDENSE_STATS	"com.klarasystems:condense_stats"
 #define	ZPOOL_CONFIG_INDIRECT_SIZE	"indirect_size"	/* not stored on disk */
 
 /* container nvlist of extended stats */
@@ -919,6 +930,7 @@ typedef struct zpool_load_policy {
 #define	ZPOOL_CONFIG_VDEV_ENC_SYSFS_PATH	"vdev_enc_sysfs_path"
 
 #define	ZPOOL_CONFIG_WHOLE_DISK		"whole_disk"
+#define	ZPOOL_CONFIG_VDEV_ROTATIONAL	"rotational"
 #define	ZPOOL_CONFIG_ERRCOUNT		"error_count"
 #define	ZPOOL_CONFIG_NOT_PRESENT	"not_present"
 #define	ZPOOL_CONFIG_SPARES		"spares"
@@ -1073,6 +1085,8 @@ typedef struct zpool_load_policy {
 	"com.delphix:vdev_initialize_state"
 #define	VDEV_LEAF_ZAP_INITIALIZE_ACTION_TIME	\
 	"com.delphix:vdev_initialize_action_time"
+#define	VDEV_LEAF_ZAP_INITIALIZE_VALUE	\
+	"org.openzfs:vdev_initialize_value"
 
 /* vdev TRIM state */
 #define	VDEV_LEAF_ZAP_TRIM_LAST_OFFSET	\
@@ -1212,6 +1226,10 @@ typedef enum pool_scrub_cmd {
 	POOL_SCRUB_FLAGS_END
 } pool_scrub_cmd_t;
 
+typedef enum pool_scrub_flags {
+	POOL_SCRUB_THOROUGH = 1 << 0,
+} pool_scrub_flags_t;
+
 typedef enum {
 	CS_NONE,
 	CS_CHECKPOINT_EXISTS,
@@ -1302,8 +1320,14 @@ typedef struct pool_scan_stat {
 	/* error scrub values not stored on disk */
 	/* error scrub pause time in milliseconds */
 	uint64_t	pss_pass_error_scrub_pause;
+	uint64_t	pss_pass_scrub_flags;
 
 } pool_scan_stat_t;
+
+#define	POOL_SCAN_STAT_VALID(field, uint64_t_field_count) \
+	((uint64_t_field_count * sizeof (uint64_t)) >= \
+	(offsetof(pool_scan_stat_t, field) + \
+	sizeof (((pool_scan_stat_t *)NULL)->field)))
 
 typedef struct pool_removal_stat {
 	uint64_t prs_state; /* dsl_scan_state_t */
@@ -1497,6 +1521,11 @@ typedef enum pool_trim_func {
 } pool_trim_func_t;
 
 /*
+ * Condense types.
+ */
+#define	POOL_CONDENSE_LOG_SPACEMAP	"log_spacemap"
+
+/*
  * DDT statistics.  Note: all fields should be 64-bit because this
  * is passed between kernel and userland as an nvlist uint64 array.
  */
@@ -1675,6 +1704,7 @@ typedef enum zfs_ioc {
 	ZFS_IOC_POOL_SCRUB,			/* 0x5a57 */
 	ZFS_IOC_POOL_PREFETCH,			/* 0x5a58 */
 	ZFS_IOC_DDT_PRUNE,			/* 0x5a59 */
+	ZFS_IOC_POOL_CONDENSE,			/* 0x5a5a */
 
 	/*
 	 * Per-platform (Optional) - 8/128 numbers reserved.
@@ -1815,6 +1845,7 @@ typedef enum {
 	ZPOOL_WAIT_SCRUB,
 	ZPOOL_WAIT_TRIM,
 	ZPOOL_WAIT_RAIDZ_EXPAND,
+	ZPOOL_WAIT_CONDENSE,
 	ZPOOL_WAIT_NUM_ACTIVITIES
 } zpool_wait_activity_t;
 
@@ -1889,6 +1920,7 @@ typedef enum {
  */
 #define	ZPOOL_INITIALIZE_COMMAND	"initialize_command"
 #define	ZPOOL_INITIALIZE_VDEVS		"initialize_vdevs"
+#define	ZPOOL_INITIALIZE_VALUE		"initialize_value"
 
 /*
  * The following are names used when invoking ZFS_IOC_POOL_REGUID.
@@ -1902,6 +1934,12 @@ typedef enum {
 #define	ZPOOL_TRIM_VDEVS		"trim_vdevs"
 #define	ZPOOL_TRIM_RATE			"trim_rate"
 #define	ZPOOL_TRIM_SECURE		"trim_secure"
+
+/*
+ * The following are names used when invoking ZPOOL_IOC_POOL_CONDENSE.
+ */
+#define	ZPOOL_CONDENSE_COMMAND		"condense_command"
+#define	ZPOOL_CONDENSE_TYPE		"condense_type"
 
 /*
  * The following are names used when invoking ZFS_IOC_POOL_WAIT.

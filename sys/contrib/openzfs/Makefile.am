@@ -31,9 +31,10 @@ if BUILD_LINUX
 include $(srcdir)/%D%/udev/Makefile.am
 endif
 endif
-CPPCHECKDIRS += module
 if CONFIG_KERNEL
 SUBDIRS += module
+
+CPPCHECKDIRS += module
 
 extradir = $(prefix)/src/zfs-$(VERSION)
 extra_HEADERS = zfs.release.in zfs_config.h.in
@@ -138,6 +139,7 @@ cstyle:
 		! -path './include/sys/lua/*' \
 		! -path './module/lua/l*.[ch]' \
 		! -path './module/zfs/lz4.c' \
+		! -path './tests/unit/munit.[ch]' \
 		$(cstyle_line)
 
 filter_executable = -exec test -x '{}' \; -print

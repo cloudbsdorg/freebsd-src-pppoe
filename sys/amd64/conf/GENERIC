@@ -27,7 +27,7 @@ options 	SCHED_ULE		# ULE scheduler
 options 	SCHED_4BSD		# Original 4.xBSD scheduler
 options 	NUMA			# Non-Uniform Memory Architecture support
 options 	PREEMPTION		# Enable kernel thread preemption
-options 	EXTERR_STRINGS
+options 	EXTERR_STRINGS		# Retain exterror(9) strings in the kernel
 options 	VIMAGE			# Subsystem virtualization, e.g. VNET
 options 	INET			# InterNETworking
 options 	INET6			# IPv6 communications protocols
@@ -70,6 +70,7 @@ options 	COMPAT_FREEBSD11	# Compatible with FreeBSD11
 options 	COMPAT_FREEBSD12	# Compatible with FreeBSD12
 options 	COMPAT_FREEBSD13	# Compatible with FreeBSD13
 options 	COMPAT_FREEBSD14	# Compatible with FreeBSD14
+options 	COMPAT_FREEBSD15	# Compatible with FreeBSD15
 options 	SCSI_DELAY=5000		# Delay (in ms) before probing SCSI
 options 	KTRACE			# ktrace(1) support
 options 	STACK			# stack(9) support
@@ -329,6 +330,7 @@ device		xz			# lzma decompression
 device		bpf			# Berkeley packet filter
 
 # random(4)
+device		padlock_rng		# VIA Padlock RNG
 device		rdrand_rng		# Intel Bull Mountain RNG
 # Disabled for now since tpm(4) breaks suspend/resume.
 #device		tpm			# Trusted Platform Module
@@ -342,6 +344,9 @@ device		uhci			# UHCI PCI->USB interface
 device		ohci			# OHCI PCI->USB interface
 device		ehci			# EHCI PCI->USB interface (USB 2.0)
 device		xhci			# XHCI PCI->USB interface (USB 3.0)
+# Disabled for now since thunderbolt(4) breaks suspend/resume in some instances
+# and the overall implementation isn't fully fleshed out yet.
+#device		thunderbolt		# Thunderbolt PCI->USB interface (USB 4.0)
 device		usb			# USB Bus (required)
 device		usbhid			# USB HID Transport
 device		hkbd			# HID Keyboard

@@ -525,6 +525,8 @@ VNET_DECLARE(if_t, loif);	/* first loopback interface */
 #define MCDPRINTF(...)
 #endif
 
+typedef int (*if_foreach_group_cb_t)(struct ifg_group *, void *);
+int	if_foreach_group(if_t, if_foreach_group_cb_t, void *);
 int	if_addgroup(if_t, const char *);
 int	if_delgroup(if_t, const char *);
 int	if_addmulti(if_t, struct sockaddr *, struct ifmultiaddr **);
@@ -563,7 +565,9 @@ int	ifa_add_loopback_route(struct ifaddr *, struct sockaddr *);
 int	ifa_del_loopback_route(struct ifaddr *, struct sockaddr *);
 int	ifa_switch_loopback_route(struct ifaddr *, struct sockaddr *);
 
+struct	ifaddr *ifa_ifwithaddr_fib(const struct sockaddr *, int);
 struct	ifaddr *ifa_ifwithaddr(const struct sockaddr *);
+int		ifa_ifwithaddr_fib_check(const struct sockaddr *, int);
 int		ifa_ifwithaddr_check(const struct sockaddr *);
 struct	ifaddr *ifa_ifwithbroadaddr(const struct sockaddr *, int);
 struct	ifaddr *ifa_ifwithdstaddr(const struct sockaddr *, int);

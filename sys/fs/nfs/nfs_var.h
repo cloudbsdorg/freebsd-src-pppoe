@@ -169,6 +169,7 @@ int nfsrv_mdscopymr(char *, char *, char *, char *, int *, char *, NFSPROC_T *,
     struct nfsdevice **);
 void nfsrv_marknospc(char *, bool);
 void nfsrv_removedeleg(fhandle_t *, struct nfsrv_descript *, NFSPROC_T *);
+void nfsrv_freestrandedstate(struct nfsrvfh *);
 
 /* nfs_nfsdserv.c */
 int nfsrvd_access(struct nfsrv_descript *, int,
@@ -661,7 +662,7 @@ void nfscl_rellayout(struct nfscllayout *, int);
 struct nfscldevinfo *nfscl_getdevinfo(struct nfsclclient *, uint8_t *,
     struct nfscldevinfo *);
 void nfscl_reldevinfo(struct nfscldevinfo *);
-int nfscl_adddevinfo(struct nfsmount *, struct nfscldevinfo *, int,
+int nfscl_adddevinfo(struct nfsmount *, struct nfscldevinfo *, int, int,
     struct nfsclflayout *);
 void nfscl_freelayout(struct nfscllayout *);
 void nfscl_freeflayout(struct nfsclflayout *);
@@ -761,10 +762,10 @@ int nfsvno_testexp(struct nfsrv_descript *, struct nfsexstuff *);
 uint32_t nfsrv_hashfh(fhandle_t *);
 uint32_t nfsrv_hashsessionid(uint8_t *);
 void nfsrv_backupstable(void);
-int nfsrv_dsgetdevandfh(struct vnode *, NFSPROC_T *, int *, fhandle_t *,
-    char *);
-int nfsrv_dsgetsockmnt(struct vnode *, int, char *, int *, int *,
-    NFSPROC_T *, struct vnode **, fhandle_t *, char *, char *,
+int nfsrv_dsgetdevandfh(struct vnode *, NFSPROC_T *, int *, uint64_t *, int *,
+    fhandle_t **, char **);
+int nfsrv_dsgetsockmnt(struct vnode *, int, char *, int *, int *, int *,
+    uint64_t *, NFSPROC_T *, struct vnode ***, fhandle_t **, char **, char *,
     struct vnode **, struct nfsmount **, struct nfsmount *, int *, int *);
 int nfsrv_dscreate(struct vnode *, struct vattr *, struct vattr *,
     fhandle_t *, struct pnfsdsfile *, struct pnfsdsattr *, char *,

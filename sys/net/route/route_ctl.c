@@ -196,10 +196,7 @@ get_info_weight(const struct rt_addrinfo *info, uint32_t default_weight)
 		weight = info->rti_rmx->rmx_weight;
 	else
 		weight = default_weight;
-	/* Keep upper 1 byte for adm distance purposes */
-	if (weight > RT_MAX_WEIGHT)
-		weight = RT_MAX_WEIGHT;
-	else if (weight == 0)
+	if (weight == 0)
 		weight = default_weight;
 
 	return (weight);
@@ -879,21 +876,8 @@ add_route_flags_mpath(struct rib_head *rnh, struct rtentry *rt,
 		}
 		return (error);
 	}
-	error = change_route_conditional(rnh, rt, rnd_orig, &rnd_new, rc);
-	if (error != 0)
-		return (error);
 
-	if (V_fib_hash_outbound == 0 && NH_IS_NHGRP(rc->rc_nh_new)) {
-		/*
-		 * First multipath route got installed. Enable local
-		 * outbound connections hashing.
-		 */
-		if (bootverbose)
-			printf("FIB: enabled flowid calculation for locally-originated packets\n");
-		V_fib_hash_outbound = 1;
-	}
-
-	return (0);
+	return (change_route_conditional(rnh, rt, rnd_orig, &rnd_new, rc));
 }
 
 /*

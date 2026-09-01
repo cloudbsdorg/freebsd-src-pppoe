@@ -124,7 +124,7 @@ __DEFAULT_YES_OPTIONS = \
     LLVM_ASSERTIONS \
     LLVM_BINUTILS \
     LLVM_BINUTILS_BOOTSTRAP \
-    LLVM_COV \
+    LOADER_BIOS \
     LOADER_BIOS_TEXTONLY \
     LOADER_GELI \
     LOADER_IA32 \
@@ -133,6 +133,7 @@ __DEFAULT_YES_OPTIONS = \
     LOADER_OFW \
     LOADER_PXEBOOT \
     LOADER_UBOOT \
+    LOADER_USERBOOT \
     LOADER_ZFS \
     LOCALES \
     LOCATE \
@@ -203,7 +204,6 @@ __DEFAULT_NO_OPTIONS = \
     CLANG_FORMAT \
     CLEAN \
     DETECT_TZ_CHANGES \
-    DIALOG \
     DISK_IMAGE_TOOLS_BOOTSTRAP \
     DTRACE_ASAN \
     DTRACE_TESTS \
@@ -346,8 +346,8 @@ BROKEN_OPTIONS+=LOADER_IA32
 BROKEN_OPTIONS+=LOADER_GELI LOADER_LUA
 .endif
 
-# Kernel TLS is enabled by default on amd64, aarch64 and powerpc64*
-.if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T:Mpowerpc64*} != ""
+# Kernel TLS is enabled by default on amd64, aarch64, powerpc64*, and riscv64*
+.if ${__T} == "aarch64" || ${__T} == "amd64" || ${__T:Mpowerpc64*} != "" || ${__T:Mriscv64*} != ""
 __DEFAULT_YES_OPTIONS+=OPENSSL_KTLS
 .else
 __DEFAULT_NO_OPTIONS+=OPENSSL_KTLS
@@ -510,7 +510,6 @@ MK_LLVM_BINUTILS:=	no
 MK_CLANG_EXTRAS:= no
 MK_CLANG_FORMAT:= no
 MK_CLANG_FULL:= no
-MK_LLVM_COV:= no
 .endif
 
 .if ${MK_ASAN} == "yes"

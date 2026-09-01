@@ -71,6 +71,9 @@
 #include "bnxt_mgmt.h"
 #include "bnxt_ulp.h"
 #include "bnxt_auxbus_compat.h"
+#include "bnxt_log.h"
+#include "bnxt_log_data.h"
+#include "bnxt_coredump.h"
 
 /*
  * PCI Device ID Table
@@ -212,7 +215,11 @@ static int bnxt_detach(if_ctx_t ctx);
 
 /* Device configuration */
 static void bnxt_init(if_ctx_t ctx);
+static int bnxt_init_hw(if_ctx_t ctx);
 static void bnxt_stop(if_ctx_t ctx);
+static void bnxt_if_led_func(if_ctx_t ctx, int onoff);
+static bool bnxt_if_led_supported(if_ctx_t ctx);
+static void bnxt_led_restore(struct bnxt_softc *softc);
 static void bnxt_multi_set(if_ctx_t ctx);
 static int bnxt_mtu_set(if_ctx_t ctx, uint32_t mtu);
 static void bnxt_media_status(if_ctx_t ctx, struct ifmediareq * ifmr);
@@ -267,6 +274,7 @@ static void bnxt_queue_fw_reset_work(struct bnxt_softc *bp, unsigned long delay)
 void bnxt_queue_sp_work(struct bnxt_softc *bp);
 
 void bnxt_fw_reset(struct bnxt_softc *bp);
+static int bnxt_crash_dump_init(struct bnxt_softc *softc);
 /*
  * Device Interface Declaration
  */
@@ -337,6 +345,8 @@ static device_method_t bnxt_iflib_methods[] = {
 
 	DEVMETHOD(ifdi_init, bnxt_init),
 	DEVMETHOD(ifdi_stop, bnxt_stop),
+	DEVMETHOD(ifdi_led_func, bnxt_if_led_func),
+	DEVMETHOD(ifdi_led_supported, bnxt_if_led_supported),
 	DEVMETHOD(ifdi_multi_set, bnxt_multi_set),
 	DEVMETHOD(ifdi_mtu_set, bnxt_mtu_set),
 	DEVMETHOD(ifdi_media_status, bnxt_media_status),
@@ -1099,9 +1109,10 @@ static int bnxt_alloc_ctx_mem_blk(struct bnxt_softc *softc,
 	return bnxt_alloc_ring(softc, rmem);
 }
 
-static int bnxt_alloc_ctx_pg_tbls(struct bnxt_softc *softc,
-				  struct bnxt_ctx_pg_info *ctx_pg, u32 mem_size,
-				  u8 depth, struct bnxt_ctx_mem_type *ctxm)
+int
+bnxt_alloc_ctx_pg_tbls(struct bnxt_softc *softc,
+    struct bnxt_ctx_pg_info *ctx_pg, uint32_t mem_size, uint8_t depth,
+    struct bnxt_ctx_mem_type *ctxm)
 {
 	struct bnxt_ring_mem_info *rmem = &ctx_pg->ring_mem;
 	int rc;
@@ -1159,8 +1170,8 @@ static int bnxt_alloc_ctx_pg_tbls(struct bnxt_softc *softc,
 	return rc;
 }
 
-static void bnxt_free_ctx_pg_tbls(struct bnxt_softc *softc,
-				  struct bnxt_ctx_pg_info *ctx_pg)
+void bnxt_free_ctx_pg_tbls(struct bnxt_softc *softc,
+			   struct bnxt_ctx_pg_info *ctx_pg)
 {
 	struct bnxt_ring_mem_info *rmem = &ctx_pg->ring_mem;
 
@@ -1243,6 +1254,64 @@ static void bnxt_free_ctx_mem(struct bnxt_softc *softc)
 	softc->ctx_mem = NULL;
 }
 
+const u16 bnxt_bstore_to_trace[] = {
+	[BNXT_CTX_SRT_TRACE] =
+	    HWRM_DBG_LOG_BUFFER_FLUSH_INPUT_TYPE_SRT_TRACE,
+	[BNXT_CTX_SRT2_TRACE] =
+	    HWRM_DBG_LOG_BUFFER_FLUSH_INPUT_TYPE_SRT2_TRACE,
+	[BNXT_CTX_CRT_TRACE] =
+	    HWRM_DBG_LOG_BUFFER_FLUSH_INPUT_TYPE_CRT_TRACE,
+	[BNXT_CTX_CRT2_TRACE] =
+	    HWRM_DBG_LOG_BUFFER_FLUSH_INPUT_TYPE_CRT2_TRACE,
+	[BNXT_CTX_RIGP0_TRACE] =
+	    HWRM_DBG_LOG_BUFFER_FLUSH_INPUT_TYPE_RIGP0_TRACE,
+	[BNXT_CTX_L2_HWRM_TRACE] =
+	    HWRM_DBG_LOG_BUFFER_FLUSH_INPUT_TYPE_L2_HWRM_TRACE,
+	[BNXT_CTX_ROCE_HWRM_TRACE] =
+	    HWRM_DBG_LOG_BUFFER_FLUSH_INPUT_TYPE_ROCE_HWRM_TRACE,
+};
+
+static void
+bnxt_bs_trace_init(struct bnxt_softc *bp, struct bnxt_ctx_mem_type *ctxm)
+{
+	uint32_t mem_size, pages, rem_bytes, magic_byte_offset;
+	struct bnxt_ctx_pg_info *ctx_pg = ctxm->pg_info;
+	struct bnxt_ring_mem_info *rmem, *rmem_pg_tbl;
+	uint32_t last_pg, n = 1, size = sizeof(uint8_t);
+	struct bnxt_bs_trace_info *bs_trace;
+	uint16_t trace_type;
+
+	mem_size = ctxm->max_entries * ctxm->entry_size;
+	rem_bytes = mem_size % BNXT_PAGE_SIZE;
+	pages = DIV_ROUND_UP(mem_size, BNXT_PAGE_SIZE);
+
+	last_pg = (pages - 1) & (MAX_CTX_PAGES - 1);
+	magic_byte_offset = ((rem_bytes ? rem_bytes : BNXT_PAGE_SIZE) - size);
+
+	if (ctxm->instance_bmap) {
+		if (ctxm->instance_bmap > 1)
+			return;
+		n = bitcount32(ctxm->instance_bmap);
+	}
+
+	rmem = &ctx_pg[n - 1].ring_mem;
+	trace_type = bnxt_bstore_to_trace[ctxm->type];
+	bs_trace = &bp->bs_trace[trace_type];
+	bs_trace->ctx_type = ctxm->type;
+	bs_trace->trace_type = trace_type;
+	if (pages > MAX_CTX_PAGES) {
+		int last_pg_directory = rmem->nr_pages - 1;
+
+		rmem_pg_tbl =
+		    &ctx_pg[n - 1].ctx_pg_tbl[last_pg_directory]->ring_mem;
+		bs_trace->magic_byte = rmem_pg_tbl->pg_arr[last_pg].idi_vaddr;
+	} else {
+		bs_trace->magic_byte = rmem->pg_arr[last_pg].idi_vaddr;
+	}
+	bs_trace->magic_byte += magic_byte_offset;
+	*bs_trace->magic_byte = BNXT_TRACE_BUF_MAGIC_BYTE;
+}
+
 static int
 bnxt_backing_store_cfg_v2(struct bnxt_softc *softc, u32 ena)
 {
@@ -1264,7 +1333,7 @@ bnxt_backing_store_cfg_v2(struct bnxt_softc *softc, u32 ena)
 				continue;
 			}
 			/* ckp TODO: this is trace buffer related stuff, so keeping it diabled now. needs revisit */
-			//bnxt_bs_trace_init(bp, ctxm, type - BNXT_CTX_SRT_TRACE);
+			bnxt_bs_trace_init(softc, ctxm);
 			last_type = type;
 		}
 	}
@@ -2180,11 +2249,16 @@ static int bnxt_open(struct bnxt_softc *bp)
 	rc = bnxt_hwrm_func_qcaps(bp);
 	if (rc)
 		return rc;
+	(void)bnxt_hwrm_port_led_qcaps(bp);
+
+	bnxt_hwrm_dbg_qcaps(bp);
 
 	/* Register the driver with the FW */
 	rc = bnxt_drv_rgtr(bp);
 	if (rc)
 		return rc;
+	/* Retry a restore which could not complete before firmware reset. */
+	bnxt_led_restore(bp);
 	if (bp->hwrm_spec_code >= 0x10803) {
 		rc = bnxt_alloc_ctx_mem(bp);
 		if (rc) {
@@ -2198,7 +2272,7 @@ static int bnxt_open(struct bnxt_softc *bp)
 
 	if (BNXT_CHIP_P5_PLUS(bp))
 		bnxt_hwrm_reserve_rings(bp);
-	
+
 	/* Get the current configuration of this function */
 	rc = bnxt_hwrm_func_qcfg(bp);
 	if (rc) {
@@ -2207,7 +2281,9 @@ static int bnxt_open(struct bnxt_softc *bp)
 	}
 
 	bnxt_msix_intr_assign(bp->ctx, 0);
-	bnxt_init(bp->ctx);
+	rc = bnxt_init_hw(bp->ctx);
+	if (rc != 0)
+		return (rc);
 	bnxt_intr_enable(bp->ctx);
 
 	if (test_and_clear_bit(BNXT_STATE_FW_RESET_DET, &bp->state)) {
@@ -2328,6 +2404,7 @@ static void bnxt_fw_reset_task(struct work_struct *work)
 		bnxt_ulp_start(bp, 0);
 		clear_bit(BNXT_STATE_FW_ACTIVATE, &bp->state);
 		set_bit(BNXT_STATE_OPEN, &bp->state);
+		bnxt_crash_dump_init(bp);
 #ifdef PCI_IOV
 		bnxt_reenable_sriov(bp);
 #endif
@@ -2446,6 +2523,37 @@ bnxt_hwrm_reserve_rings(struct bnxt_softc *softc)
 		return bnxt_hwrm_reserve_vf_rings(softc);
 }
 
+static void
+bnxt_log_live_data(void *d)
+{
+	struct bnxt_softc *bp = d;
+
+	bnxt_log_ring_states(bp);
+}
+
+/* DDR Crash Dump Setup */
+static int
+bnxt_crash_dump_init(struct bnxt_softc *softc)
+{
+	int rc;
+
+	rc = bnxt_alloc_crash_dump_mem(softc);
+	if (rc) {
+		device_printf(softc->dev,
+		    "crash dump mem alloc failure rc: %d\n", rc);
+		return (rc);
+	}
+
+	rc = bnxt_hwrm_crash_dump_mem_cfg(softc);
+	if (rc) {
+		bnxt_free_crash_dump_mem(softc);
+		device_printf(softc->dev,
+		    "hwrm crash dump mem failure rc: %d\n", rc);
+	}
+
+	return (rc);
+}
+
 /* Device setup and teardown */
 static int
 bnxt_attach_pre(if_ctx_t ctx)
@@ -2495,6 +2603,11 @@ bnxt_attach_pre(if_ctx_t ctx)
 		goto pci_attach_fail;
 	}
 
+	mtx_init(&softc->log_lock, "BNXT LOG Lock", NULL, MTX_DEF);
+	TAILQ_INIT(&softc->loggers_list);
+	bnxt_register_logger(softc, BNXT_LOGGER_L2, BNXT_L2_MAX_LOG_BUFFERS,
+			     bnxt_log_live_data, BNXT_L2_MAX_LIVE_LOG_SIZE);
+
 	/* HWRM setup/init */
 	BNXT_HWRM_LOCK_INIT(softc, device_get_nameunit(softc->dev));
 	rc = bnxt_alloc_hwrm_dma_mem(softc);
@@ -2527,7 +2640,7 @@ bnxt_attach_pre(if_ctx_t ctx)
 		if (rc)
 			goto hwrm_short_cmd_alloc_fail;
 	}
-	
+
 	/* Now perform a function reset */
 	rc = bnxt_hwrm_func_reset(softc);
 
@@ -2623,6 +2736,7 @@ bnxt_attach_pre(if_ctx_t ctx)
 	rc = bnxt_hwrm_func_qcaps(softc);
 	if (rc)
 		goto failed;
+	(void)bnxt_hwrm_port_led_qcaps(softc);
 
 	/* Inform PF to approve MAC as default VF MAC. */
 	if (BNXT_VF(softc)) {
@@ -2632,6 +2746,8 @@ bnxt_attach_pre(if_ctx_t ctx)
 			goto failed;
 		}
 	}
+
+	bnxt_hwrm_dbg_qcaps(softc);
 
 	/*
 	 * Register the driver with the FW
@@ -2820,6 +2936,7 @@ bnxt_attach_pre(if_ctx_t ctx)
 
 	return (rc);
 
+
 failed:
 	bnxt_free_sysctl_ctx(softc);
 init_sysctl_failed:
@@ -2875,11 +2992,14 @@ bnxt_attach_post(if_ctx_t ctx)
 	bnxt_dcb_init(softc);
 	bnxt_rdma_aux_device_init(softc);
 
-#if PCI_IOV
 	/* SR-IOV attach */
 	if (BNXT_PF(softc) && BNXT_CHIP_P5_PLUS(softc))
 		bnxt_sriov_attach(softc);
-#endif
+
+	rc = bnxt_crash_dump_init(softc);
+	if (rc)
+		device_printf(softc->dev,
+		    "crash dump init failure rc: %d\n", rc);
 
 failed:
 	return rc;
@@ -2902,6 +3022,7 @@ bnxt_detach(if_ctx_t ctx)
 	bnxt_wol_config(ctx);
 	bnxt_do_disable_intr(&softc->def_cp_ring);
 	bnxt_free_sysctl_ctx(softc);
+	bnxt_free_crash_dump_mem(softc);
 	bnxt_hwrm_func_reset(softc);
 	bnxt_free_ctx_mem(softc);
 	bnxt_clear_ids(softc);
@@ -2932,6 +3053,9 @@ bnxt_detach(if_ctx_t ctx)
 	bnxt_free_hwrm_dma_mem(softc);
 	bnxt_free_hwrm_short_cmd_req(softc);
 	BNXT_HWRM_LOCK_DESTROY(softc);
+
+	bnxt_unregister_logger(softc, BNXT_LOGGER_L2);
+	mtx_destroy(&softc->log_lock);
 
 	if (!bnxt_num_pfs && bnxt_pf_wq)
 		destroy_workqueue(bnxt_pf_wq);
@@ -3036,6 +3160,7 @@ fail:
 static void
 bnxt_func_reset(struct bnxt_softc *softc)
 {
+	bnxt_led_restore(softc);
 
 	if (!BNXT_CHIP_P5_PLUS(softc)) {
 		bnxt_hwrm_func_reset(softc);
@@ -3166,6 +3291,14 @@ skip_aux_init:
 static void
 bnxt_init(if_ctx_t ctx)
 {
+
+	if (bnxt_init_hw(ctx) != 0)
+		iflib_init_failed(ctx);
+}
+
+static int
+bnxt_init_hw(if_ctx_t ctx)
+{
 	struct bnxt_softc *softc = iflib_get_softc(ctx);
 	struct ifmediareq ifmr;
 	int i;
@@ -3174,7 +3307,7 @@ bnxt_init(if_ctx_t ctx)
 	if (!BNXT_CHIP_P5_PLUS(softc)) {
 		rc = bnxt_hwrm_func_reset(softc);
 		if (rc)
-			return;
+			return (rc);
 	} else if (softc->is_dev_init) {
 		bnxt_stop(ctx);
 	}
@@ -3349,12 +3482,13 @@ skip_def_cp_ring:
 	bnxt_get_port_module_status(softc);
 	bnxt_media_status(softc->ctx, &ifmr);
 	bnxt_hwrm_cfa_l2_set_rx_mask(softc, &softc->vnic_info);
-	return;
+	return (0);
 
 fail:
 	bnxt_func_reset(softc);
 	bnxt_clear_ids(softc);
-	return;
+	softc->is_dev_init = false;
+	return (rc);
 }
 
 static void
@@ -3367,6 +3501,37 @@ bnxt_stop(if_ctx_t ctx)
 	bnxt_func_reset(softc);
 	bnxt_clear_ids(softc);
 	return;
+}
+
+static void
+bnxt_if_led_func(if_ctx_t ctx, int onoff)
+{
+	struct bnxt_softc *softc = iflib_get_softc(ctx);
+	bool active;
+
+	active = onoff != 0;
+	if (active == softc->led_active)
+		return;
+	if (bnxt_hwrm_port_led_cfg(softc, active) == 0)
+		softc->led_active = active;
+}
+
+static void
+bnxt_led_restore(struct bnxt_softc *softc)
+{
+
+	if (!softc->led_active)
+		return;
+	if (bnxt_hwrm_port_led_cfg(softc, false) == 0)
+		softc->led_active = false;
+}
+
+static bool
+bnxt_if_led_supported(if_ctx_t ctx)
+{
+	struct bnxt_softc *softc = iflib_get_softc(ctx);
+
+	return (softc->num_leds != 0);
 }
 
 static u_int
@@ -5018,7 +5183,7 @@ bnxt_report_link(struct bnxt_softc *softc)
 		}
 
 		iflib_link_state_change(softc->ctx, LINK_STATE_UP,
-		    IF_Gbps(100));
+		    bnxt_get_baudrate(&softc->link_info));
 		device_printf(softc->dev, "Link is UP %s %s, %s - %d Mbps \n", duplex, signal_mode,
 		    flow_ctrl, (link_info->link_speed * 100));
 	} else {
@@ -5327,11 +5492,16 @@ bnxt_def_cp_task(void *context, int pending)
 
 	/* Handle completions on the default completion ring */
 	struct cmpl_base *cmpl;
-	uint32_t cons = cpr->cons;
-	bool v_bit = cpr->v_bit;
+	uint32_t cons;
+	bool v_bit;
 	bool last_v_bit;
 	uint32_t last_cons;
 	uint16_t type;
+
+	if (iflib_in_detach(ctx))
+		return;
+	cons = cpr->cons;
+	v_bit = cpr->v_bit;
 
 	for (;;) {
 		last_cons = cons;

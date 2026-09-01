@@ -140,6 +140,10 @@
                 include
                 ..
             ..
+            085.datetime
+                include
+                ..
+            ..
             090.timezone
                 include
                 ..
@@ -210,6 +214,8 @@
             ..
         ..
         bsdconfig
+            datetime
+            ..
             media
             ..
             networking
@@ -503,8 +509,6 @@
             man4
                 aarch64
                 ..
-                amd64
-                ..
                 arm
                 ..
                 i386
@@ -519,12 +523,6 @@
             man7
             ..
             man8
-                amd64
-                ..
-                i386
-                ..
-                powerpc
-                ..
             ..
             man9
             ..

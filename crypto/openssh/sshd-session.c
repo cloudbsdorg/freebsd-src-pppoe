@@ -1,4 +1,4 @@
-/* $OpenBSD: sshd-session.c,v 1.23 2026/03/11 09:10:59 dtucker Exp $ */
+/* $OpenBSD: sshd-session.c,v 1.24 2026/06/14 03:59:34 djm Exp $ */
 /*
  * SSH2 implementation:
  * Privilege Separation:
@@ -440,6 +440,7 @@ get_hostkey_by_type(int type, int nid, int need_private, struct ssh *ssh)
 		case KEY_ED25519_CERT:
 		case KEY_ECDSA_SK_CERT:
 		case KEY_ED25519_SK_CERT:
+		case KEY_MLDSA44_ED25519_CERT:
 			key = sensitive_data.host_certificates[i];
 			break;
 		default:
@@ -1369,8 +1370,11 @@ cleanup_exit(int i)
 		audit_event(the_active_state, SSH_CONNECTION_ABANDON);
 #endif
 	/* Override default fatal exit value when auth was attempted */
-	if (i == 255 && monitor_auth_attempted())
+	if (i == 255 && monitor_auth_attempted()) {
+		BLOCKLIST_NOTIFY(the_active_state, BLOCKLIST_AUTH_FAIL,
+		    "Fatal exit");
 		_exit(EXIT_AUTH_ATTEMPTED);
+	}
 	if (i == 255 && monitor_invalid_user())
 		_exit(EXIT_INVALID_USER);
 	_exit(i);

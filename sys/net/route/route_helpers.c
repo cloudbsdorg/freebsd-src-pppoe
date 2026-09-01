@@ -183,7 +183,7 @@ rib_foreach_table_walk(int family, bool wlock, rib_walktree_f_t *wa_f,
 			continue;
 		}
 
-		for (int i = 1; i <= AF_MAX; i++)
+		for (int i = 1; i < AF_MAX; i++)
 			rib_walk_ext(fibnum, i, wlock, wa_f, hook_f, arg);
 	}
 }
@@ -205,7 +205,7 @@ rib_foreach_table_walk_del(int family, rib_filter_f_t *filter_f, void *arg)
 			continue;
 		}
 
-		for (int i = 1; i <= AF_MAX; i++)
+		for (int i = 1; i < AF_MAX; i++)
 			rib_walk_del(fibnum, i, filter_f, arg, 0);
 	}
 }
@@ -458,6 +458,7 @@ rib_add_default_route(uint32_t fibnum, int family, struct ifnet *ifp,
 	nhop_set_transmit_ifp(nh, ifp);
 	nhop_set_src(nh, ifa);
 	nhop_set_pxtype_flag(nh, NHF_DEFAULT);
+	nhop_set_metric(nh, RT_DEFAULT_METRIC);
 	rnd.rnd_nhop = nhop_get_nhop(nh, &error);
 
 	if (error == 0)

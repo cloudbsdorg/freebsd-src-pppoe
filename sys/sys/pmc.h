@@ -60,7 +60,7 @@
  * The patch version is incremented for every bug fix.
  */
 #define	PMC_VERSION_MAJOR	0x0A
-#define	PMC_VERSION_MINOR	0x01
+#define	PMC_VERSION_MINOR	0x02
 #define	PMC_VERSION_PATCH	0x0000
 
 #define	PMC_VERSION		(PMC_VERSION_MAJOR << 24 |		\
@@ -111,6 +111,7 @@ extern char pmc_cpuid[PMC_CPUID_LEN];
     __PMC_CPU(INTEL_ALDERLAKEN,		0xA1,	"Intel AlderlakeN")		\
     __PMC_CPU(INTEL_GRANITE_RAPIDS,	0xA2,	"Intel Granite Rapids")		\
     __PMC_CPU(INTEL_METEOR_LAKE,	0xA3,	"Intel Meteorlake")		\
+    __PMC_CPU(INTEL_SAPPHIRE_RAPIDS,	0xA4,	"Intel Sapphire Rapids")	\
     __PMC_CPU(PPC_7450,			0x300,	"PowerPC MPC7450")		\
     __PMC_CPU(PPC_E500,			0x340,	"PowerPC e500 Core")		\
     __PMC_CPU(PPC_970,			0x380,	"IBM PowerPC 970")		\
@@ -155,7 +156,8 @@ enum pmc_cputype {
     __PMC_CLASS(POWER8,		0x15,	"IBM POWER8 class")			\
     __PMC_CLASS(DMC620_PMU_CD2,	0x16,	"ARM DMC620 Memory Controller PMU CLKDIV2") \
     __PMC_CLASS(DMC620_PMU_C,	0x17,	"ARM DMC620 Memory Controller PMU CLK")	\
-    __PMC_CLASS(CMN600_PMU,	0x18,	"Arm CoreLink CMN600 Coherent Mesh Network PMU")
+    __PMC_CLASS(CMN600_PMU,	0x18,	"Arm CoreLink CMN600 Coherent Mesh Network PMU") \
+    __PMC_CLASS(RAPL,		0x19,	"AMD/Intel RAPL energy counters")
 
 enum pmc_class {
 #undef  __PMC_CLASS
@@ -164,7 +166,7 @@ enum pmc_class {
 };
 
 #define	PMC_CLASS_FIRST	PMC_CLASS_TSC
-#define	PMC_CLASS_LAST	PMC_CLASS_CMN600_PMU
+#define	PMC_CLASS_LAST	PMC_CLASS_RAPL
 
 /*
  * A PMC can be in the following states:

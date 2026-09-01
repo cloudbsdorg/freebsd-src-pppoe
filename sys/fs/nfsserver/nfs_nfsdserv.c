@@ -49,6 +49,7 @@
 #include <fs/nfs/nfsport.h>
 #include <sys/extattr.h>
 #include <sys/filio.h>
+#include <rpc/krpc.h>
 
 /* Global vars */
 extern u_int32_t newnfs_false, newnfs_true;
@@ -579,6 +580,16 @@ nfsrvd_setattr(struct nfsrv_descript *nd, __unused int isdgram,
 		NFSVNO_SETATTRVAL(&nva2, btime, nva.na_btime);
 		nd->nd_repstat = nfsvno_setattr(vp, &nva2, nd->nd_cred, p,
 		    exp);
+		/*
+		 * ZFS stores with early versions do not support va_birthtime
+		 * and will reply EINVAL when setting is attempted.  This
+		 * breaks the MacOS NFSv4 client, so pretend it succeeded if
+		 * ctime and/or mtime were set as well.
+		 */
+		if (nd->nd_repstat == EINVAL &&
+		    (NFSISSET_ATTRBIT(&retbits, NFSATTRBIT_TIMEACCESSSET) ||
+		     NFSISSET_ATTRBIT(&retbits, NFSATTRBIT_TIMEMODIFYSET)))
+			nd->nd_repstat = 0;
 		if (!nd->nd_repstat)
 		    NFSSETBIT_ATTRBIT(&retbits, NFSATTRBIT_TIMECREATE);
 	    }
@@ -1018,13 +1029,16 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 	if (cnt > 0) {
 		/*
 		 * If cnt > MCLBYTES and the reply will not be saved, use
-		 * ext_pgs mbufs for TLS.
+		 * ext_pgs mbufs for TLS of if enabled via
+		 * vfs.nfsd.enable_mextpg.
 		 * For NFSv4.0, we do not know for sure if the reply will
 		 * be saved, so do not use ext_pgs mbufs for NFSv4.0.
 		 * Always use ext_pgs mbufs if ND_EXTPG is set.
 		 */
 		if ((nd->nd_flag & ND_EXTPG) != 0 || (cnt > MCLBYTES &&
-		    (nd->nd_flag & (ND_TLS | ND_SAVEREPLY)) == ND_TLS &&
+		    ((nd->nd_flag & (ND_TLS | ND_SAVEREPLY)) == ND_TLS ||
+		     (nd->nd_flag & (ND_CANEXTPG | ND_SAVEREPLY)) ==
+		      ND_CANEXTPG) &&
 		    (nd->nd_flag & (ND_NFSV4 | ND_NFSV41)) != ND_NFSV4))
 			nd->nd_repstat = nfsvno_read(vp, off, cnt, nd->nd_cred,
 			    nd->nd_maxextsiz, p, &m3, &m2);
@@ -1063,6 +1077,20 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 	}
 	*tl = txdr_unsigned(cnt);
 	if (m3) {
+		/*
+		 * For RDMA, inform the server side rdma the reduction's
+		 * position.
+		 */
+		if ((nd->nd_flag & ND_RDMA) != 0 && nd->nd_xprt != NULL) {
+			KASSERT(cnt > 0,
+			    ("nfsrvd_read: m3 != NULL when cnt == 0"));
+			struct rpcrdma_reduce ddp;
+
+			ddp.xid = nd->nd_retxid;
+			ddp.off = (uint32_t)m_length(nd->nd_mreq, NULL);
+			ddp.len = (uint32_t)cnt;
+			(void)SVC_CONTROL(nd->nd_xprt, SVCSET_READDDP, &ddp);
+		}
 		nd->nd_mb->m_next = m3;
 		nd->nd_mb = m2;
 		if ((m2->m_flags & M_EXTPG) != 0) {
@@ -5133,11 +5161,15 @@ nfsrvd_layoutget(struct nfsrv_descript *nd, __unused int isdgram,
 	}
 
 	layp = NULL;
+#ifdef notnow
 	if (layouttype == NFSLAYOUT_NFSV4_1_FILES && nfsrv_maxpnfsmirror == 1)
 		layp = malloc(NFSX_V4FILELAYOUT, M_TEMP, M_WAITOK);
 	else if (layouttype == NFSLAYOUT_FLEXFILE)
-		layp = malloc(NFSX_V4FLEXLAYOUT(nfsrv_maxpnfsmirror), M_TEMP,
-		    M_WAITOK);
+#else
+	if (layouttype == NFSLAYOUT_FLEXFILE)
+#endif
+		layp = malloc(NFSX_V4FLEXLAYOUT(NFSDEV_MAXMIRRORS,
+		    NFSDEV_MAXSTRIPE), M_TEMP, M_WAITOK);
 	else
 		nd->nd_repstat = NFSERR_UNKNLAYOUTTYPE;
 	if (layp != NULL)
@@ -5692,7 +5724,7 @@ nfsrvd_allocate(struct nfsrv_descript *nd, __unused int isdgram,
 	nfsquad_t clientid;
 	nfsattrbit_t attrbits;
 
-	if (!nfsrv_doallocate) {
+	if (!nfsrv_doallocate || nfsrv_devidcnt > 0) {
 		/*
 		 * If any exported file system, such as a ZFS one, cannot
 		 * do VOP_ALLOCATE(), this operation cannot be supported
@@ -5824,9 +5856,9 @@ nfsrvd_deallocate(struct nfsrv_descript *nd, __unused int isdgram,
 	}
 	stp->ls_stateid.other[2] = *tl++;
 	/*
-	 * Don't allow this to be done for a DS.
+	 * Don't allow this to be done for a DS or MDS.
 	 */
-	if ((nd->nd_flag & ND_DSSERVER) != 0)
+	if ((nd->nd_flag & ND_DSSERVER) != 0 || nfsrv_devidcnt > 0)
 		nd->nd_repstat = NFSERR_NOTSUPP;
 	/* However, allow the proxy stateid. */
 	if (stp->ls_stateid.seqid == 0xffffffff &&
@@ -6361,6 +6393,8 @@ nfsrvd_seek(struct nfsrv_descript *nd, __unused int isdgram,
 		nd->nd_repstat = NFSERR_WRONGTYPE;
 	if (nd->nd_repstat == 0 && off < 0)
 		nd->nd_repstat = NFSERR_NXIO;
+	if (nd->nd_repstat == 0 && nfsrv_devidcnt > 0)
+		nd->nd_repstat = NFSERR_NOTSUPP;
 	if (nd->nd_repstat == 0) {
 		/* Check permissions for the input file. */
 		NFSZERO_ATTRBIT(&attrbits);

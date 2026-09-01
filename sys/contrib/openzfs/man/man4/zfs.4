@@ -1,24 +1,22 @@
 .\" SPDX-License-Identifier: CDDL-1.0
 .\"
+.\" This file and its contents are supplied under the terms of the
+.\" Common Development and Distribution License ("CDDL"), version 1.0.
+.\" You may only use this file in accordance with the terms of version
+.\" 1.0 of the CDDL.
+.\"
+.\" A full copy of the text of the CDDL should have accompanied this
+.\" source.  A copy of the CDDL is also available via the Internet at
+.\" https://opensource.org/license/CDDL-1.0.
+.\"
 .\" Copyright (c) 2013 by Turbo Fredriksson <turbo@bayour.com>. All rights reserved.
 .\" Copyright (c) 2019, 2021 by Delphix. All rights reserved.
 .\" Copyright (c) 2019 Datto Inc.
 .\" Copyright (c) 2023, 2024, 2025, Klara, Inc.
+.\" Copyright (c) 2026, Mateusz Piotrowski <0mp@FreeBSD.org>
+.\" Copyright (c) 2026, TrueNAS.
 .\"
-.\" The contents of this file are subject to the terms of the Common Development
-.\" and Distribution License (the "License").  You may not use this file except
-.\" in compliance with the License. You can obtain a copy of the license at
-.\" usr/src/OPENSOLARIS.LICENSE or https://opensource.org/licenses/CDDL-1.0.
-.\"
-.\" See the License for the specific language governing permissions and
-.\" limitations under the License. When distributing Covered Code, include this
-.\" CDDL HEADER in each file and include the License file at
-.\" usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this
-.\" CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your
-.\" own identifying information:
-.\" Portions Copyright [yyyy] [name of copyright owner]
-.\"
-.Dd September 15, 2025
+.Dd July 12, 2026
 .Dt ZFS 4
 .Os
 .
@@ -389,6 +387,18 @@ this is
 or
 .Em 2*1024 Pq with Sy ashift Ns = Ns Sy 12 .
 .
+.It Sy metaslab_df_alloc_threshold Ns = Ns Sy 131072 Ns B Po 128 KiB Pc Pq u64
+Minimum size which forces the dynamic allocator to change its allocation
+strategy.
+Once the space map cannot satisfy an allocation of this size, it switches to a
+more aggressive strategy (searching by size rather than offset).
+.
+.It Sy metaslab_df_free_pct Ns = Ns Sy 4 Ns % Pq uint
+The minimum free space, in percent, which must be available in a space map to
+continue allocations in a first-fit fashion.
+Once free space drops below this level, allocations switch to a best-fit
+strategy.
+.
 .It Sy metaslab_df_use_largest_segment Ns = Ns Sy 0 Ns | Ns 1 Pq int
 If not searching forward (due to
 .Sy metaslab_df_max_search , metaslab_df_free_pct ,
@@ -445,6 +455,32 @@ This improves performance, especially when there are many metaslabs per vdev
 and the allocation can't actually be satisfied
 (so we would otherwise iterate all metaslabs).
 .
+.It Sy zfs_metaslab_sm_blksz_no_log Ns = Ns Sy 16384 Ns B Po 16 KiB Pc Pq int
+Block size for the metaslab space maps in pools where the
+.Sy log_spacemap
+feature is disabled.
+Multiple metaslabs are modified per transaction group, so a smaller block size
+lets more, scattered I/O operations be issued.
+Must be a power of 2 greater than
+.Sy 4096 .
+This parameter can only be set at module load time.
+.
+.It Sy zfs_metaslab_sm_blksz_with_log Ns = Ns Sy 131072 Ns B Po 128 KiB Pc Pq int
+Block size for the metaslab space maps in pools where the
+.Sy log_spacemap
+feature is enabled.
+Changes are batched in the per-pool log spacemap and flushed to each metaslab's
+space map only occasionally, so a larger block size is more efficient.
+Must be a power of 2 greater than
+.Sy 4096 .
+This parameter can only be set at module load time.
+.
+.It Sy zfs_metaslab_condense_pct Ns = Ns Sy 200 Ns % Pq uint
+Condense an on-disk space map when its size exceeds this percentage of
+the in-memory representation.
+The minimum is
+.Sy 100 .
+.
 .It Sy zfs_vdev_default_ms_count Ns = Ns Sy 200 Pq uint
 When a vdev is added, target this number of metaslabs per top-level vdev.
 .
@@ -495,6 +531,16 @@ and are recovering a damaged label.
 .
 .It Sy zfs_vdev_ms_count_limit Ns = Ns Sy 131072 Po 128k Pc Pq uint
 Practical upper limit of total metaslabs per top-level vdev.
+.
+.It Sy zfs_vdev_dtl_sm_blksz Ns = Ns Sy 4096 Ns B Po 4 KiB Pc Pq int
+Since the DTL space map of a vdev is not expected to have a lot of
+entries, we default its block size to 4K.
+.
+.It Sy zfs_vdev_standard_sm_blksz Ns = Ns Sy 131072 Ns B Po 128 KiB Pc Pq int
+vdev-wide space maps that have lots of entries written to them at
+the end of each transaction can benefit from a higher I/O bandwidth
+.Pq e.g. Sy vdev_obsolete_sm ,
+thus we default their block size to 128K.
 .
 .It Sy metaslab_preload_enabled Ns = Ns Sy 1 Ns | Ns 0 Pq int
 Enable metaslab group preloading.
@@ -768,9 +814,15 @@ See also
 which serves a similar purpose but has a higher priority if nonzero.
 .
 .It Sy zfs_arc_dnode_reduce_percent Ns = Ns Sy 10 Ns % Pq u64
-Percentage of ARC dnodes to try to scan in response to demand for non-metadata
-when the number of bytes consumed by dnodes exceeds
-.Sy zfs_arc_dnode_limit .
+Percentage used to size dnode prune requests.
+The request size is the larger of two values:
+.Sy zfs_arc_dnode_reduce_percent
+applied to the dnode count above
+.Sy zfs_arc_dnode_limit ,
+or
+.Sy zfs_arc_dnode_reduce_percent
+applied to the total dnode count
+when non-evictable metadata exceeds 3/4 of the metadata target.
 .
 .It Sy zfs_arc_average_blocksize Ns = Ns Sy 8192 Ns B Po 8 KiB Pc Pq uint
 The ARC's buffer hash table is sized based on the assumption of an average
@@ -911,6 +963,19 @@ but that was not proven to be useful.
 Number of missing top-level vdevs which will be allowed during
 pool import (only in read-only mode).
 .
+.It Sy zfs_max_missing_tvds_cachefile Ns = Ns Sy 2 Pq u64
+Number of missing top-level vdevs tolerated when importing a pool
+from a cachefile, before the trusted config is read from the MOS.
+A cachefile can fall out of sync with the on-disk config after a
+device removal that did not rewrite the cachefile, so the default
+of 2 still lets the import reach a copy of the MOS.
+.
+.It Sy zfs_max_missing_tvds_scan Ns = Ns Sy 0 Pq u64
+Number of missing top-level vdevs tolerated when importing a pool
+by scanning device paths, before the trusted config is read from
+the MOS.
+Defaults to 0 because a scan should detect every present device.
+.
 .It Sy zfs_max_nvlist_src_size Ns = Sy 0 Pq u64
 Maximum size in bytes allowed to be passed as
 .Sy zc_nvlist_src_size
@@ -948,8 +1013,6 @@ equivalent to the greater of the number of online CPUs and
 If less than
 .Sy arc_c No >> Sy zfs_arc_no_grow_shift
 free memory is available, the ARC is not allowed to grow.
-This parameter is
-.Fx Ns -specific .
 .
 .It Sy zfs_arc_overflow_shift Ns = Ns Sy 8 Pq int
 The ARC size is considered to be overflowing if it exceeds the current
@@ -1033,6 +1096,10 @@ This parameter is
 and uses pages, unlike the Linux-specific
 .Sy zfs_arc_sys_free
 which is measured in bytes.
+.
+.It Sy zfs_ccw_retry_interval Ns = Ns Sy 300 Ns s Pq int
+Interval, in seconds, at which a failed write of the configuration cache file
+is retried.
 .
 .It Sy zfs_checksum_events_per_second Ns = Ns Sy 20 Ns /s Pq uint
 Rate limit checksum events to this many per second.
@@ -1506,6 +1573,8 @@ Note that for small files this may be slower than simply copying the file.
 When set to 0 the clone operation will immediately fail if it encounters
 any dirty blocks.
 By default waiting is enabled.
+A FIDEDUPERANGE request always waits, as it has no copy fallback that
+could absorb the failure.
 .
 .It Sy zfs_blake3_impl Ns = Ns Sy fastest Pq string
 Select a BLAKE3 implementation.
@@ -1696,6 +1765,16 @@ itself, it will be clamped.
 Setting it to zero will cause the kernel's ideal size to be used.
 This parameter only applies on Linux.
 .
+.It Sy zfs_vdev_disk_calling_thread_io Ns = Ns Sy 0 Ns | Ns 1 Pq uint
+Controls calling thread io, note that we only wait for the zio to
+complete if it bypassed the vdev queue, all this module parameter does
+is enable that capability.
+May lead to performance improvements when enabled if backing vdev devices
+are fast and low latency.
+May impact performance with certain workloads when enabled on raidz or draid
+zpool configurations.
+This parameter currently only applies on Linux.
+.
 .It Sy zfs_expire_snapshot Ns = Ns Sy 300 Ns s Pq int
 Time before expiring
 .Pa .zfs/snapshot .
@@ -1847,8 +1926,13 @@ The default value of 5 transaction groups typically provides sufficient time
 for import and mount operations to complete on most systems.
 .
 .It Sy zfs_initialize_value Ns = Ns Sy 16045690984833335022 Po 0xDEADBEEFDEADBEEE Pc Pq u64
-Pattern written to vdev free space by
-.Xr zpool-initialize 8 .
+Default pattern written to vdev free space by
+.Xr zpool-initialize 8 ,
+used unless
+.Nm zpool Cm initialize Fl z
+requests zeroes instead.
+The value in effect when a device starts initializing is recorded per device
+and reused if the run is suspended and later resumed.
 .
 .It Sy zfs_initialize_chunk_size Ns = Ns Sy 1048576 Ns B Po 1 MiB Pc Pq u64
 Size of writes used by
@@ -1937,6 +2021,12 @@ Normally disabled because these datasets may be missing key data.
 .
 .It Sy zfs_min_metaslabs_to_flush Ns = Ns Sy 1 Pq u64
 Minimum number of metaslabs to flush per dirty TXG.
+.
+.It Sy zfs_min_metaslabs_to_condense_pct Ns = Ns Sy 5 Pq u64
+Minimum number of metaslabs to flush every TXG when condensing log spacemaps,
+as a percentage of the number of unflushed metaslabs at the time the
+.Nm zpool Cm condense
+command was run.
 .
 .It Sy zfs_metaslab_fragmentation_threshold Ns = Ns Sy 77 Ns % Pq uint
 Allow metaslabs to keep their active state as long as their fragmentation
@@ -2209,7 +2299,7 @@ Error blocks to be scrubbed in one txg.
 When enabled, ZFS counts blocks by type and indirection level during a scrub.
 The counts are kept in memory for debugging and are not exposed to userspace.
 .
-.It Sy zfs_scan_checkpoint_intval Ns = Ns Sy 7200 Ns s Po 2 hour Pc Pq uint
+.It Sy zfs_scan_checkpoint_intval Ns = Ns Sy 7200 Ns s Po 2 hours Pc Pq uint
 To preserve progress across reboots, the sequential scan algorithm periodically
 needs to stop metadata scanning and issue all the verification I/O to disk.
 The frequency of this flushing is determined by this tunable.
@@ -2340,6 +2430,25 @@ This is the uncompressed size, even when receiving a compressed send stream.
 This setting will not reduce the write size below a single block.
 Capped at a maximum of
 .Sy 32 MiB .
+.
+.It Sy zfs_recv_defer_batch_size Ns = Ns Sy 33554432 Ns B Po 32 MiB Pc Pq uint
+When a non-raw incremental stream reallocates an object at a different
+dnode size,
+.Nm zfs Cm receive
+must wait for the old dnode's free to be written out before the object
+number can be reused.
+Rather than forcing one transaction group sync per reallocated object,
+affected records are parked, up to this many bytes at a time, and applied
+together behind a single sync.
+Parked records hold their payloads in memory, so a receive may use up to
+this much memory in addition to
+.Sy zfs_recv_queue_length .
+While records are parked, the saved resume state is held back at the first
+parked record, so interrupting a receive can require resending up to this
+much of the stream.
+Setting this to
+.Sy 0
+restores the previous behavior of one sync per reallocated object.
 .
 .It Sy zfs_recv_best_effort_corrective Ns = Ns Sy 0 Pq int
 When this variable is set to non-zero a corrective receive:
@@ -2832,9 +2941,9 @@ for each I/O submitter.
 When unset, requests are handled asynchronously by a thread pool.
 The number of requests which can be handled concurrently is controlled by
 .Sy zvol_threads .
-.Sy zvol_request_sync
-is ignored when running on a kernel that supports block multiqueue
-.Pq Li blk-mq .
+This parameter applies regardless of the
+.Sy zvol_use_blk_mq
+setting.
 .
 .It Sy zvol_num_taskqs Ns = Ns Sy 0 Pq uint
 Number of zvol taskqs.

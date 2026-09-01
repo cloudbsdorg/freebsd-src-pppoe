@@ -56,6 +56,11 @@ struct acpi_softc {
     int			acpi_enabled;
     enum power_stype	acpi_stype;
     int			acpi_sleep_disabled;
+    sbintime_t		acpi_resume_sbt;	/* Uptime at last resume. */
+
+    /* Supported sleep states and types. */
+    bool		acpi_supported_stypes[POWER_STYPE_COUNT];
+    bool		acpi_supported_sstates[ACPI_S_STATE_COUNT];
 
     struct sysctl_ctx_list acpi_sysctl_ctx;
     struct sysctl_oid	*acpi_sysctl_tree;
@@ -64,7 +69,6 @@ struct acpi_softc {
     enum power_stype	acpi_lid_switch_stype;
 
     int			acpi_standby_sx;
-    bool		acpi_s4bios;
     bool		acpi_s4bios_supported;
 
     int			acpi_sleep_delay;
@@ -362,9 +366,9 @@ typedef void acpi_subtable_handler(ACPI_SUBTABLE_HEADER *, void *);
 
 BOOLEAN		acpi_DeviceIsPresent(device_t dev);
 BOOLEAN		acpi_BatteryIsPresent(device_t dev);
-ACPI_STATUS	acpi_GetHandleInScope(ACPI_HANDLE parent, char *path,
+ACPI_STATUS	acpi_GetHandleInScope(ACPI_HANDLE parent, const char *path,
 		    ACPI_HANDLE *result);
-ACPI_STATUS	acpi_GetProperty(device_t dev, ACPI_STRING propname,
+ACPI_STATUS	acpi_GetProperty(device_t dev, const char *propname,
 		    const ACPI_OBJECT **value);
 ACPI_BUFFER	*acpi_AllocBuffer(int size);
 ACPI_STATUS	acpi_ConvertBufferToInteger(ACPI_BUFFER *bufp,
@@ -413,7 +417,7 @@ int		acpi_MatchHid(ACPI_HANDLE h, const char *hid);
 #define ACPI_MATCHHID_CID 2
 
 static __inline bool
-acpi_HasProperty(device_t dev, ACPI_STRING propname)
+acpi_HasProperty(device_t dev, const char *propname)
 {
 
 	return ACPI_SUCCESS(acpi_GetProperty(dev, propname, NULL));
@@ -454,10 +458,10 @@ ACPI_STATUS	acpi_parse_resources(device_t dev, ACPI_HANDLE handle,
 		    struct acpi_parse_resource_set *set, void *arg);
 
 /* ACPI event handling */
-UINT32		acpi_event_power_button_sleep(void *context);
-UINT32		acpi_event_power_button_wake(void *context);
-UINT32		acpi_event_sleep_button_sleep(void *context);
-UINT32		acpi_event_sleep_button_wake(void *context);
+UINT32		acpi_event_power_button_sleep(struct acpi_softc *sc);
+UINT32		acpi_event_power_button_wake(struct acpi_softc *sc);
+UINT32		acpi_event_sleep_button_sleep(struct acpi_softc *sc);
+UINT32		acpi_event_sleep_button_wake(struct acpi_softc *sc);
 
 #define ACPI_EVENT_PRI_FIRST      0
 #define ACPI_EVENT_PRI_DEFAULT    10000
@@ -471,6 +475,9 @@ EVENTHANDLER_DECLARE(acpi_acad_event, acpi_event_handler_t);
 EVENTHANDLER_DECLARE(acpi_video_event, acpi_event_handler_t);
 EVENTHANDLER_DECLARE(acpi_post_dev_suspend, acpi_event_handler_t);
 EVENTHANDLER_DECLARE(acpi_pre_dev_resume, acpi_event_handler_t);
+
+void		acpi_invoke_sleep_eventhandler(const enum power_stype *stype);
+void		acpi_invoke_wake_eventhandler(const enum power_stype *stype);
 
 /* Device power control. */
 ACPI_STATUS	acpi_pwr_wake_enable(ACPI_HANDLE consumer, int enable);
@@ -511,13 +518,6 @@ acpi_d_state_to_str(int state)
 	return ("unknown D-state");
     MPASS(state >= ACPI_STATE_D0 && state <= ACPI_D_STATES_MAX);
     return (strs[state]);
-}
-
-static __inline bool
-acpi_should_do_s4bios(struct acpi_softc *sc)
-{
-    MPASS(!sc->acpi_s4bios || sc->acpi_s4bios_supported);
-    return (sc->acpi_s4bios);
 }
 
 char		*acpi_name(ACPI_HANDLE handle);
@@ -603,6 +603,9 @@ void		acpi_pxm_set_mem_locality(void);
 void		acpi_pxm_set_cpu_locality(void);
 int		acpi_pxm_get_cpu_locality(int apic_id);
 int		acpi_pxm_parse(device_t dev);
+int		acpi_get_cpus_for_domain(device_t dev, device_t child,
+		    int domain, enum cpu_sets op, size_t setsize,
+		    cpuset_t *cpuset);
 
 /*
  * Map a PXM to a VM domain.

@@ -41,6 +41,7 @@
 #include <sys/systm.h>
 #include <sys/acct.h>
 #include <sys/bitstring.h>
+#include <sys/capsicum.h>
 #include <sys/eventhandler.h>
 #include <sys/exterrvar.h>
 #include <sys/fcntl.h>
@@ -66,6 +67,7 @@
 #include <sys/signalvar.h>
 #include <sys/sx.h>
 #include <sys/syscall.h>
+#include <sys/syscallsubr.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
 #include <sys/vmmeter.h>
@@ -118,6 +120,7 @@ int
 sys_pdfork(struct thread *td, struct pdfork_args *uap)
 {
 	struct fork_req fr;
+	struct filecaps fcaps;
 	int error, fd, pid;
 
 	bzero(&fr, sizeof(fr));
@@ -125,6 +128,10 @@ sys_pdfork(struct thread *td, struct pdfork_args *uap)
 	fr.fr_pidp = &pid;
 	fr.fr_pd_fd = &fd;
 	fr.fr_pd_flags = uap->flags;
+	filecaps_fill(&fcaps);
+	if ((uap->flags & PD_PTRACE_CAP) == 0)
+		cap_rights_clear(&fcaps.fc_rights, CAP_PTRACE);
+	fr.fr_pd_fcaps = &fcaps;
 	AUDIT_ARG_FFLAGS(uap->flags);
 	/*
 	 * It is necessary to return fd by reference because 0 is a valid file
@@ -193,6 +200,7 @@ int
 sys_pdrfork(struct thread *td, struct pdrfork_args *uap)
 {
 	struct fork_req fr;
+	struct filecaps fcaps;
 	int error, fd, pid;
 
 	bzero(&fr, sizeof(fr));
@@ -225,6 +233,10 @@ sys_pdrfork(struct thread *td, struct pdrfork_args *uap)
 	fr.fr_pidp = &pid;
 	fr.fr_pd_fd = &fd;
 	fr.fr_pd_flags = uap->pdflags;
+	filecaps_fill(&fcaps);
+	if ((uap->pdflags & PD_PTRACE_CAP) == 0)
+		cap_rights_clear(&fcaps.fc_rights, CAP_PTRACE);
+	fr.fr_pd_fcaps = &fcaps;
 	error = fork1(td, &fr);
 	if (error == 0) {
 		td->td_retval[0] = pid;
@@ -546,6 +558,15 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	    P2_STKGAP_DISABLE | P2_STKGAP_DISABLE_EXEC | P2_NO_NEW_PRIVS |
 	    P2_WXORX_DISABLE | P2_WXORX_ENABLE_EXEC | P2_LOGSIGEXIT_CTL |
 	    P2_LOGSIGEXIT_ENABLE);
+	if ((fr->fr_flags & RFPROCDESC) != 0) {
+		p2->p_zombieref = PZOMBIEREF_PROCDESC;
+		if ((fr->fr_pd_flags & PD_NOWAITPID) == 0 &&
+		    (fr->fr_flags & RFNOWAIT) == 0)
+			p2->p_zombieref |= (PZOMBIEREF_PARENT |
+			    PZOMBIEREF_NEEDPARENT);
+	} else {
+		p2->p_zombieref = PZOMBIEREF_PARENT | PZOMBIEREF_NEEDPARENT;
+	}
 	p2->p_swtick = ticks;
 	if (p1->p_flag & P_PROFIL)
 		startprofclock(p2);
@@ -675,11 +696,6 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 
 	callout_init_mtx(&p2->p_itcallout, &p2->p_mtx, 0);
 
-	/*
-	 * This begins the section where we must prevent the parent
-	 * from being swapped.
-	 */
-	_PHOLD(p1);
 	PROC_UNLOCK(p1);
 
 	/*
@@ -705,6 +721,13 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	if (p2->p_reaper == p1 && p1 != initproc) {
 		p2->p_reapsubtree = p2->p_pid;
 		proc_id_set_cond(PROC_ID_REAP, p2->p_pid);
+	} else {
+		/*
+		 * Explicitly copy this field under the proctree lock, as it
+		 * might have changed since the bulk copying of the parent's
+		 * fields.
+		 */
+		p2->p_reapsubtree = p1->p_reapsubtree;
 	}
 	sx_xunlock(&proctree_lock);
 
@@ -786,10 +809,6 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 	 */
 	knote_fork(p1->p_klist, p2->p_pid);
 
-	/*
-	 * Now can be swapped.
-	 */
-	_PRELE(p1);
 	PROC_UNLOCK(p1);
 	SDT_PROBE3(proc, , , create, p2, p1, fr->fr_flags);
 
@@ -832,6 +851,15 @@ do_fork(struct thread *td, struct fork_req *fr, struct proc *p2, struct thread *
 		PROC_UNLOCK(p2);
 		sx_xunlock(&proctree_lock);
 	}
+
+	/*
+	 * Activate procdesc NOTE_FORK after we attached the debugger
+	 * to the child.  This guarantees that a debugger which does
+	 * kevent() on the process descriptor to get notifications of
+	 * fork events, can properly observe the child right after the
+	 * notification fired.
+	 */
+	procdesc_fork(p1, p2->p_pid);
 
 	racct_proc_fork_done(p2);
 
@@ -1051,6 +1079,7 @@ fork1(struct thread *td, struct fork_req *fr)
 		    fr->fr_pd_flags, fr->fr_pd_fcaps);
 		if (error != 0)
 			goto fail2;
+		fr->fr_pd_fcaps = NULL;
 		AUDIT_ARG_FD(*fr->fr_pd_fd);
 	}
 
@@ -1059,6 +1088,7 @@ fork1(struct thread *td, struct fork_req *fr)
 		pages = kstack_pages;
 	/* Allocate new proc. */
 	newproc = uma_zalloc(proc_zone, M_WAITOK);
+	PROC_TREE_REF(newproc);
 	td2 = FIRST_THREAD_IN_PROC(newproc);
 	if (td2 == NULL) {
 		td2 = thread_alloc(pages);
@@ -1139,11 +1169,14 @@ fail1:
 fail2:
 	if (vm2 != NULL)
 		vmspace_free(vm2);
-	uma_zfree(proc_zone, newproc);
+	if (newproc != NULL)
+		PROC_TREE_UNREF(newproc);
 	if ((flags & RFPROCDESC) != 0 && fp_procdesc != NULL) {
 		fdclose(td, fp_procdesc, *fr->fr_pd_fd);
 		fdrop(fp_procdesc, td);
 	}
+	if (fr->fr_pd_fcaps != NULL)
+		filecaps_free(fr->fr_pd_fcaps);
 	atomic_add_int(&nprocs, -1);
 cleanup:
 	if (killsx_locked)
@@ -1267,7 +1300,7 @@ fork_return(struct thread *td, struct trapframe *frame)
 	 * If the prison was killed mid-fork, die along with it.
 	 */
 	if (!prison_isalive(td->td_ucred->cr_prison))
-		exit1(td, 0, SIGKILL);
+		kern_exit(td, 0, SIGKILL);
 
 #ifdef KTRACE
 	if (KTRPOINT(td, KTR_SYSRET))

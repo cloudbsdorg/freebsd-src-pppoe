@@ -33,6 +33,7 @@
 #include "bnxt.h"
 #include "bnxt_hwrm.h"
 #include "hsi_struct_def.h"
+#include "bnxt_coredump.h"
 
 static int bnxt_hwrm_err_map(uint16_t err);
 static inline int _is_valid_ether_addr(uint8_t *);
@@ -73,6 +74,31 @@ static void	bnxt_hwrm_set_eee(struct bnxt_softc *softc,
 	BNXT_TX_STATS_PRI_ENTRY(counter, 6),		\
 	BNXT_TX_STATS_PRI_ENTRY(counter, 7)
 
+#define BNXT_LED_DFLT_ENA				\
+	(HWRM_PORT_LED_CFG_INPUT_ENABLES_LED0_ID |	\
+	 HWRM_PORT_LED_CFG_INPUT_ENABLES_LED0_STATE |	\
+	 HWRM_PORT_LED_CFG_INPUT_ENABLES_LED0_BLINK_ON |	\
+	 HWRM_PORT_LED_CFG_INPUT_ENABLES_LED0_BLINK_OFF |	\
+	 HWRM_PORT_LED_CFG_INPUT_ENABLES_LED0_GROUP_ID)
+#define BNXT_LED_DFLT_ENA_SHIFT	6
+#define BNXT_LED_DFLT_ENABLES(_i)			\
+	(BNXT_LED_DFLT_ENA << (BNXT_LED_DFLT_ENA_SHIFT * (_i)))
+#define BNXT_LED_ALT_BLINK_CAP \
+	HWRM_PORT_LED_QCAPS_OUTPUT_LED0_STATE_CAPS_BLINK_ALT_SUPPORTED
+
+struct bnxt_led_cfg {
+	uint8_t		led_id;
+	uint8_t		led_state;
+	uint8_t		led_color;
+	uint8_t		unused;
+	uint16_t	led_blink_on;
+	uint16_t	led_blink_off;
+	uint8_t		led_group_id;
+	uint8_t		reserved;
+};
+
+CTASSERT(sizeof(struct bnxt_led_info) == 8);
+CTASSERT(sizeof(struct bnxt_led_cfg) == 10);
 
 long bnxt_rx_bytes_pri_arr_base_off[] = {BNXT_RX_STATS_PRI_ENTRIES(rx_bytes)};
 long bnxt_rx_pkts_pri_arr_base_off[] = {BNXT_RX_STATS_PRI_ENTRIES(rx_packets)};
@@ -889,6 +915,8 @@ bnxt_hwrm_ver_get(struct bnxt_softc *softc)
 	if (rc)
 		goto fail;
 
+	memcpy(&softc->ver_resp, resp, sizeof(struct hwrm_ver_get_output));
+
 	snprintf(softc->ver_info->hwrm_if_ver, BNXT_VERSTR_SIZE, "%d.%d.%d",
 	    resp->hwrm_intf_maj_8b, resp->hwrm_intf_min_8b, resp->hwrm_intf_upd_8b);
 	softc->ver_info->hwrm_if_major = resp->hwrm_intf_maj_8b;
@@ -1326,6 +1354,86 @@ bnxt_hwrm_func_qcaps(struct bnxt_softc *softc)
 fail:
 	BNXT_HWRM_UNLOCK(softc);
 	return rc;
+}
+
+int
+bnxt_hwrm_port_led_qcaps(struct bnxt_softc *softc)
+{
+	struct hwrm_port_led_qcaps_output *resp;
+	struct hwrm_port_led_qcaps_input req = {0};
+	struct bnxt_led_info *led;
+	uint16_t caps;
+	int i, rc;
+
+	softc->num_leds = 0;
+	if (BNXT_VF(softc) || softc->hwrm_spec_code < 0x10601)
+		return (0);
+
+	resp = (void *)softc->hwrm_cmd_resp.idi_vaddr;
+	bnxt_hwrm_cmd_hdr_init(softc, &req, HWRM_PORT_LED_QCAPS);
+	req.port_id = htole16(softc->pf.port_id);
+
+	BNXT_HWRM_LOCK(softc);
+	rc = _hwrm_send_message(softc, &req, sizeof(req));
+	if (rc != 0)
+		goto out;
+
+	/* HWRM describes up to four LED records in both response and request. */
+	if (resp->num_leds == 0 || resp->num_leds > BNXT_MAX_LED)
+		goto out;
+	memcpy(softc->leds, &resp->led0_id,
+	    sizeof(softc->leds[0]) * resp->num_leds);
+	softc->num_leds = resp->num_leds;
+	for (i = 0; i < softc->num_leds; i++) {
+		led = &softc->leds[i];
+		caps = le16toh(led->led_state_caps);
+		if (led->led_group_id == 0 ||
+		    (caps & BNXT_LED_ALT_BLINK_CAP) == 0) {
+			softc->num_leds = 0;
+			break;
+		}
+	}
+out:
+	BNXT_HWRM_UNLOCK(softc);
+	return (rc);
+}
+
+int
+bnxt_hwrm_port_led_cfg(struct bnxt_softc *softc, bool led_on)
+{
+	struct hwrm_port_led_cfg_input req = {0};
+	struct bnxt_led_cfg *led_cfg;
+	uint32_t enables;
+	uint16_t duration;
+	uint8_t led_state;
+	int i;
+
+	if (BNXT_VF(softc) || softc->num_leds == 0)
+		return (EOPNOTSUPP);
+
+	bnxt_hwrm_cmd_hdr_init(softc, &req, HWRM_PORT_LED_CFG);
+	req.port_id = htole16(softc->pf.port_id);
+	req.num_leds = softc->num_leds;
+	led_state = HWRM_PORT_LED_CFG_INPUT_LED0_STATE_DEFAULT;
+	duration = 0;
+	if (led_on) {
+		led_state = HWRM_PORT_LED_CFG_INPUT_LED0_STATE_BLINKALT;
+		duration = htole16(500);
+	}
+
+	enables = 0;
+	led_cfg = (struct bnxt_led_cfg *)(void *)&req.led0_id;
+	for (i = 0; i < softc->num_leds; i++, led_cfg++) {
+		enables |= BNXT_LED_DFLT_ENABLES(i);
+		led_cfg->led_id = softc->leds[i].led_id;
+		led_cfg->led_state = led_state;
+		led_cfg->led_blink_on = duration;
+		led_cfg->led_blink_off = duration;
+		led_cfg->led_group_id = softc->leds[i].led_group_id;
+	}
+	req.enables = htole32(enables);
+
+	return (hwrm_send_message(softc, &req, sizeof(req)));
 }
 
 int
@@ -3326,4 +3434,120 @@ void bnxt_hwrm_ring_info_get(struct bnxt_softc *softc, uint8_t ring_type,
 	}
 
 	return;
+}
+
+/* Query debug capabilities */
+void
+bnxt_hwrm_dbg_qcaps(struct bnxt_softc *softc)
+{
+	hwrm_dbg_qcaps_input_t req = {0};
+	hwrm_dbg_qcaps_output_t *resp;
+	uint32_t flags;
+	int rc;
+
+	softc->fw_dbg_cap = 0;
+	if (!(softc->fw_cap & BNXT_FW_CAP_DBG_QCAPS))
+		return;
+
+	bnxt_hwrm_cmd_hdr_init(softc, &req, HWRM_DBG_QCAPS);
+	req.fid = htole16(0xffff);
+	resp = (hwrm_dbg_qcaps_output_t *)(void *)
+	    softc->hwrm_cmd_resp.idi_vaddr;
+	rc = hwrm_send_message(softc, &req, sizeof(req));
+	if (rc)
+		return;
+
+	flags = le32toh(resp->flags);
+	if (flags & HWRM_DBG_QCAPS_OUTPUT_FLAGS_CRASHDUMP_SOC_DDR)
+		softc->fw_dbg_cap |= BNXT_FW_DBG_CAP_CRASHDUMP_SOC;
+	if (flags & HWRM_DBG_QCAPS_OUTPUT_FLAGS_CRASHDUMP_HOST_DDR)
+		softc->fw_dbg_cap |= BNXT_FW_DBG_CAP_CRASHDUMP_HOST;
+}
+
+/* Configure firmware with DDR crash dump memory */
+int
+bnxt_hwrm_crash_dump_mem_cfg(struct bnxt_softc *softc)
+{
+	hwrm_dbg_crashdump_medium_cfg_input_t req = {0};
+	uint16_t page_attr = 0;
+	int rc;
+
+	if (!(softc->fw_dbg_cap & BNXT_FW_DBG_CAP_CRASHDUMP_HOST))
+		return (0);
+
+	bnxt_hwrm_cmd_hdr_init(softc, &req, HWRM_DBG_CRASHDUMP_MEDIUM_CFG);
+
+	if (BNXT_PAGE_SIZE == 0x2000)
+		page_attr = HWRM_DBG_CRASHDUMP_MEDIUM_CFG_INPUT_PG_SIZE_PG_8K;
+	else if (BNXT_PAGE_SIZE == 0x10000)
+		page_attr = HWRM_DBG_CRASHDUMP_MEDIUM_CFG_INPUT_PG_SIZE_PG_64K;
+	else
+		page_attr = HWRM_DBG_CRASHDUMP_MEDIUM_CFG_INPUT_PG_SIZE_PG_4K;
+
+	req.pg_size_lvl = htole16(page_attr |
+				   softc->fw_crash_mem->ring_mem.depth);
+
+	if (softc->fw_crash_mem->ring_mem.depth > 1)
+		req.pbl = htole64(
+		    softc->fw_crash_mem->ring_mem.pg_tbl.idi_paddr);
+	else
+		req.pbl = htole64(
+		    softc->fw_crash_mem->ring_mem.pg_arr[0].idi_paddr);
+
+	req.size = htole32(softc->fw_crash_len);
+	req.output_dest_flags = htole16(
+	    HWRM_DBG_CRASHDUMP_MEDIUM_CFG_INPUT_TYPE_DDR);
+
+	rc = hwrm_send_message(softc, &req, sizeof(req));
+	return (rc);
+}
+
+/* Get dump length from firmware */
+int
+bnxt_hwrm_get_dump_len(struct bnxt_softc *softc, uint16_t dump_type,
+		       uint32_t *dump_len)
+{
+	hwrm_dbg_qcfg_output_t *resp;
+	hwrm_dbg_qcfg_input_t req = {0};
+	int rc;
+
+	if (!(softc->fw_cap & BNXT_FW_CAP_DBG_QCAPS) ||
+	    dump_type == BNXT_DUMP_DRIVER)
+		return (-EOPNOTSUPP);
+
+	if (dump_type == BNXT_DUMP_CRASH &&
+	    !(softc->fw_dbg_cap & BNXT_FW_DBG_CAP_CRASHDUMP_SOC ||
+	     (softc->fw_dbg_cap & BNXT_FW_DBG_CAP_CRASHDUMP_HOST)))
+		return (-EOPNOTSUPP);
+
+	bnxt_hwrm_cmd_hdr_init(softc, &req, HWRM_DBG_QCFG);
+
+	req.fid = htole16(0xffff);
+	if (dump_type == BNXT_DUMP_CRASH) {
+		if (softc->fw_dbg_cap & BNXT_FW_DBG_CAP_CRASHDUMP_SOC)
+			req.flags = htole16(
+	    HWRM_DBG_QCFG_INPUT_FLAGS_CRASHDUMP_SIZE_FOR_DEST_DEST_SOC_DDR);
+		else
+			req.flags = htole16(
+	    HWRM_DBG_QCFG_INPUT_FLAGS_CRASHDUMP_SIZE_FOR_DEST_DEST_HOST_DDR);
+	}
+
+	resp = (hwrm_dbg_qcfg_output_t *)(void *)softc->hwrm_cmd_resp.idi_vaddr;
+	rc = hwrm_send_message(softc, &req, sizeof(req));
+	if (rc)
+		goto get_dump_len_exit;
+
+	if (dump_type == BNXT_DUMP_CRASH) {
+		if (softc->fw_dbg_cap & BNXT_FW_DBG_CAP_CRASHDUMP_SOC)
+			*dump_len = BNXT_CRASH_DUMP_LEN;
+		else
+			*dump_len = le32toh(resp->crashdump_size);
+	} else {
+		*dump_len = le32_to_cpu(resp->coredump_size);
+	}
+	if (*dump_len <= 0)
+		rc = -EINVAL;
+
+get_dump_len_exit:
+	return (rc);
 }

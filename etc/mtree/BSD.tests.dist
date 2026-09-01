@@ -292,14 +292,6 @@
     ..
     games
     ..
-    gnu
-        lib
-        ..
-        usr.bin
-            diff
-            ..
-        ..
-    ..
     include
     ..
     lib
@@ -834,6 +826,8 @@
         fs
             fusefs
             ..
+            pjdfstest
+            ..
             tarfs
             ..
             tmpfs
@@ -894,6 +888,8 @@
         mac
             bsdextended
             ..
+            do
+            ..
             ipacl
             ..
             portacl
@@ -909,6 +905,8 @@
                 ..
             ..
             routing
+            ..
+            wg
             ..
         ..
         netgraph
@@ -974,6 +972,8 @@
             ..
             utimensat
             ..
+        ..
+        pmc
         ..
         posixshm
         ..

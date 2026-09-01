@@ -1,23 +1,13 @@
 // SPDX-License-Identifier: CDDL-1.0
 /*
- * CDDL HEADER START
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
  *
- * The contents of this file are subject to the terms of the
- * Common Development and Distribution License (the "License").
- * You may not use this file except in compliance with the License.
- *
- * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or https://opensource.org/licenses/CDDL-1.0.
- * See the License for the specific language governing permissions
- * and limitations under the License.
- *
- * When distributing Covered Code, include this CDDL HEADER in each
- * file and include the License file at usr/src/OPENSOLARIS.LICENSE.
- * If applicable, add the following below this CDDL HEADER, with the
- * fields enclosed by brackets "[]" replaced with your own identifying
- * information: Portions Copyright [yyyy] [name of copyright owner]
- *
- * CDDL HEADER END
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * https://opensource.org/license/CDDL-1.0.
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
@@ -622,6 +612,32 @@ zfsvfs_init(zfsvfs_t *zfsvfs, objset_t *os)
 }
 
 int
+zfsvfs_create_hold(const char *osname, zfsvfs_t **zfvp)
+{
+	objset_t *os;
+	zfsvfs_t *zfsvfs;
+	int error;
+
+	zfsvfs = kmem_zalloc(sizeof (zfsvfs_t), KM_SLEEP);
+
+	error = dmu_objset_hold(osname, zfsvfs, &os);
+	if (error != 0) {
+		kmem_free(zfsvfs, sizeof (zfsvfs_t));
+		return (error);
+	}
+
+	if (dmu_objset_type(os) != DMU_OST_ZFS) {
+		dmu_objset_rele(os, zfsvfs);
+		kmem_free(zfsvfs, sizeof (zfsvfs_t));
+		return (EINVAL);
+	}
+
+	zfsvfs->z_use_hold = B_TRUE;
+	error = zfsvfs_create_impl(zfvp, zfsvfs, os);
+	return (error);
+}
+
+int
 zfsvfs_create(const char *osname, boolean_t readonly, zfsvfs_t **zfvp)
 {
 	objset_t *os;
@@ -678,7 +694,10 @@ zfsvfs_create_impl(zfsvfs_t **zfvp, zfsvfs_t *zfsvfs, objset_t *os)
 
 	error = zfsvfs_init(zfsvfs, os);
 	if (error != 0) {
-		dmu_objset_disown(os, B_TRUE, zfsvfs);
+		if (zfsvfs->z_use_hold)
+			dmu_objset_rele(os, zfsvfs);
+		else
+			dmu_objset_disown(os, B_TRUE, zfsvfs);
 		*zfvp = NULL;
 		zfsvfs_free(zfsvfs);
 		return (error);
@@ -1397,7 +1416,7 @@ zfs_domount(struct super_block *sb, const char *osname,
 		acltype_changed_cb(zfsvfs, pval);
 		zfsvfs->z_issnap = B_TRUE;
 		zfsvfs->z_os->os_sync = ZFS_SYNC_DISABLED;
-		zfsvfs->z_snap_defer_time = jiffies;
+		zfsvfs->z_snap_atime = jiffies;
 
 		mutex_enter(&zfsvfs->z_os->os_user_ptr_lock);
 		dmu_objset_set_user(zfsvfs->z_os, zfsvfs);
@@ -1654,7 +1673,7 @@ zfs_vget(struct super_block *sb, struct inode **ipp, fid_t *fidp)
 		zp_gen = 1;
 	if ((fid_gen == 0) && (zfsvfs->z_root == object))
 		fid_gen = zp_gen;
-	if (zp->z_unlinked || zp_gen != fid_gen) {
+	if (zp_gen != fid_gen) {
 		dprintf("znode gen (%llu) != fid gen (%llu)\n", zp_gen,
 		    fid_gen);
 		zrele(zp);
@@ -1687,6 +1706,24 @@ zfs_suspend_fs(zfsvfs_t *zfsvfs)
 		return (error);
 
 	return (0);
+}
+
+/*
+ * Return a referenced znode at or after zp.  The z_znodes_lock protects the
+ * list walk; the returned inode reference keeps the znode alive after the
+ * lock is dropped for zfs_rezget().
+ */
+static znode_t *
+zfs_resume_hold_next_znode(zfsvfs_t *zfsvfs, znode_t *zp)
+{
+	ASSERT(MUTEX_HELD(&zfsvfs->z_znodes_lock));
+
+	for (; zp != NULL; zp = list_next(&zfsvfs->z_all_znodes, zp)) {
+		if (igrab(ZTOI(zp)) != NULL)
+			return (zp);
+	}
+
+	return (NULL);
 }
 
 /*
@@ -1732,13 +1769,23 @@ zfs_resume_fs(zfsvfs_t *zfsvfs, dsl_dataset_t *ds)
 	 * dbufs.  If a zfs_rezget() fails, then we unhash the inode
 	 * and mark it stale.  This prevents a collision if a new
 	 * inode/object is created which must use the same inode
-	 * number.  The stale inode will be be released when the
-	 * VFS prunes the dentry holding the remaining references
-	 * on the stale inode.
+	 * number.  The stale inode will be released when the VFS
+	 * prunes the dentry holding the remaining references on
+	 * the stale inode.
+	 *
+	 * zfs_rezget() takes the per-object znode hold lock.  Pin each znode
+	 * while holding z_znodes_lock, then drop the list lock before calling
+	 * zfs_rezget() to preserve the normal zh_lock -> z_znodes_lock order.
 	 */
 	mutex_enter(&zfsvfs->z_znodes_lock);
-	for (zp = list_head(&zfsvfs->z_all_znodes); zp;
-	    zp = list_next(&zfsvfs->z_all_znodes, zp)) {
+	zp = zfs_resume_hold_next_znode(zfsvfs,
+	    list_head(&zfsvfs->z_all_znodes));
+	while (zp != NULL) {
+		znode_t *next = zfs_resume_hold_next_znode(zfsvfs,
+		    list_next(&zfsvfs->z_all_znodes, zp));
+
+		mutex_exit(&zfsvfs->z_znodes_lock);
+
 		err2 = zfs_rezget(zp);
 		if (err2) {
 			zpl_d_drop_aliases(ZTOI(zp));
@@ -1747,9 +1794,14 @@ zfs_resume_fs(zfsvfs_t *zfsvfs, dsl_dataset_t *ds)
 
 		/* see comment in zfs_suspend_fs() */
 		if (zp->z_suspended) {
-			zfs_zrele_async(zp);
 			zp->z_suspended = B_FALSE;
+			zfs_zrele_async(zp);
 		}
+
+		zfs_zrele_async(zp);
+
+		mutex_enter(&zfsvfs->z_znodes_lock);
+		zp = next;
 	}
 	mutex_exit(&zfsvfs->z_znodes_lock);
 
@@ -1817,23 +1869,16 @@ zfs_end_fs(zfsvfs_t *zfsvfs, dsl_dataset_t *ds)
 }
 
 /*
- * Automounted snapshots rely on periodic revalidation
- * to defer snapshots from being automatically unmounted.
+ * Bump data access time on automounted snapshots to stop them being expired
+ * out too early.
  */
-
 inline void
 zfs_exit_fs(zfsvfs_t *zfsvfs)
 {
 	if (!zfsvfs->z_issnap)
 		return;
 
-	if (time_after(jiffies, zfsvfs->z_snap_defer_time +
-	    MAX(zfs_expire_snapshot * HZ / 2, HZ))) {
-		zfsvfs->z_snap_defer_time = jiffies;
-		zfsctl_snapshot_unmount_delay(zfsvfs->z_os->os_spa,
-		    dmu_objset_id(zfsvfs->z_os),
-		    zfs_expire_snapshot);
-	}
+	atomic_store_64(&zfsvfs->z_snap_atime, jiffies);
 }
 
 int
@@ -1994,7 +2039,6 @@ zfsvfs_update_fromname(const char *oldname, const char *newname)
 void
 zfs_init(void)
 {
-	zfsctl_init();
 	zfs_znode_init();
 	dmu_objset_register_type(DMU_OST_ZFS, zpl_get_file_info);
 	register_filesystem(&zpl_fs_type);
@@ -2010,7 +2054,6 @@ zfs_fini(void)
 	taskq_wait(system_taskq);
 	unregister_filesystem(&zpl_fs_type);
 	zfs_znode_fini();
-	zfsctl_fini();
 }
 
 #if defined(_KERNEL)

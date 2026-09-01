@@ -42,7 +42,7 @@ CFLAGS+= -D__KERNEL__ -DFREEBSD_NAMECACHE -DBUILDING_ZFS -D__BSD_VISIBLE=1 \
 CFLAGS+= -D__x86_64 -DHAVE_TOOLCHAIN_SSE2 -DHAVE_TOOLCHAIN_SSSE3 \
 	-DHAVE_TOOLCHAIN_SSE4_1 -DHAVE_TOOLCHAIN_AVX -DHAVE_TOOLCHAIN_AVX2 \
 	-DHAVE_TOOLCHAIN_AVX512F -DHAVE_TOOLCHAIN_AVX512VL \
-	-DHAVE_TOOLCHAIN_AVX512BW
+	-DHAVE_TOOLCHAIN_AVX512BW -DHAVE_TOOLCHAIN_SHA512EXT
 .endif
 
 .if ${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "powerpc" || \
@@ -323,6 +323,8 @@ SRCS+=	abd.c \
 	vdev_root.c \
 	vdev_trim.c \
 	zap.c \
+	zap_fat.c \
+	zap_impl.c \
 	zap_leaf.c \
 	zap_micro.c \
 	zcp.c \
@@ -439,6 +441,7 @@ CFLAGS.vdev_raidz_math_scalar.c= -Wno-cast-qual
 CFLAGS.vdev_raidz_math_sse2.c= -Wno-cast-qual -Wno-duplicate-decl-specifier
 CFLAGS.zap_leaf.c= -Wno-cast-qual
 CFLAGS.zap_micro.c= -Wno-cast-qual
+CFLAGS.zap_impl.c= -Wno-cast-qual
 CFLAGS.zcp.c= -Wno-cast-qual
 CFLAGS.zfs_fletcher.c= -Wno-cast-qual -Wno-pointer-arith
 CFLAGS.zfs_fletcher_avx512.c= -Wno-cast-qual -Wno-pointer-arith

@@ -26,6 +26,12 @@
  * SUCH DAMAGE.
  */
 
+/*
+ * Spec references are to the Universal Serial Bus 4 (USB4®) Specification
+ * version 2.0, September 2024:
+ * https://usb.org/document-library/usb4r-specification-v20
+ */
+
 #include "opt_thunderbolt.h"
 
 /* PCIe interface for Thunderbolt Native Host Interface (nhi) */
@@ -235,11 +241,74 @@ nhi_outmail_cmd(struct nhi_softc *sc, uint32_t *val)
 	return (0);
 }
 
+static int
+nhi_reset_v1(struct nhi_softc *sc)
+{
+
+	/* See section 2.4 of HCM guide v2. */
+	nhi_write_reg(sc, ROUTER_HIR, 1);
+	pause_sbt("nhi", ustosbt(10 * 1000), 0, C_HARDCLOCK);
+	return (0);
+}
+
+static int
+nhi_reset_v2(struct nhi_softc *sc)
+{
+	uint32_t reg;
+
+	/*
+	 * TODO "The Connection Manager shall disable all Transmit Descriptor
+	 * Rings and wait for at least 1 millisecond prior to setting the Host
+	 * Router Reset bit to 1b. After the Connection Manager sets the Host
+	 * Router Reset bit to 1b, it shall not access the Receive Descriptor
+	 * Rings until the Host Router Reset bit is set to 0b."
+	 */
+	/* See section 3.5 of HCM guide v2. */
+	nhi_write_reg(sc, ROUTER_HRR, 1);
+	/*
+	 * "The Host Router is required to complete its reset within 500ms
+	 * after the Host Router Reset bit is set to 1b."
+	 */
+	reg = 1;
+	for (size_t i = 0; i < 10 && reg; i++) {
+		/*
+		 * Wait at least 50 ms after writing before reading this
+		 * register.  If this is 1, it means that we are still
+		 * resetting.
+		 */
+		pause_sbt("nhi", ustosbt(50 * 1000), 0, 0);
+		reg = nhi_read_reg(sc, ROUTER_HRR);
+	}
+	if (reg == 0) {
+		tb_debug(sc, DBG_INIT|DBG_EXTRA,
+		    "Succeeded in resetting host router\n");
+		return (0);
+	}
+	tb_printf(sc, "Host router reset timed out\n");
+	return (ETIMEDOUT);
+}
+
+static int
+nhi_reset(struct nhi_softc *sc)
+{
+
+	tb_debug(sc, DBG_INIT, "Resetting host router\n");
+
+	switch (sc->ver) {
+	case NHI_VER_1_0:
+		return (nhi_reset_v1(sc));
+	case NHI_VER_2_0:
+		return (nhi_reset_v2(sc));
+	}
+	return (ENXIO);
+}
+
 int
 nhi_attach(struct nhi_softc *sc)
 {
-	uint32_t val;
-	int error = 0;
+	uint32_t		val;
+	struct nhi_host_caps	caps;
+	int			error = 0;
 
 	if ((error = nhi_setup_sysctl(sc)) != 0)
 		return (error);
@@ -247,17 +316,31 @@ nhi_attach(struct nhi_softc *sc)
 	mtx_init(&sc->nhi_mtx, "nhimtx", "NHI Control Mutex", MTX_DEF);
 
 	/*
-	 * Get the number of TX/RX paths.  This sizes some of the register
-	 * arrays during allocation and initialization.  USB4 spec says that
-	 * the max is 21.
+	 * Get the host interface version and number of TX/RX paths.  This
+	 * sizes some of the register arrays during allocation and
+	 * initialization.  USB4 spec says that the max is 21.
 	 */
-	val = GET_HOST_CAPS_PATHS(nhi_read_reg(sc, NHI_HOST_CAPS));
-	tb_debug(sc, DBG_INIT|DBG_NOISY, "Total Paths= %d\n", val);
-	if (val == 0 || val > 21) {
+	val = nhi_read_reg(sc, NHI_HOST_CAPS);
+	caps = *(struct nhi_host_caps *)&val;
+	if (caps.version_major == 0 && caps.version_minor == 0) {
+		tb_printf(sc, "Host interface is version 1.0\n");
+		sc->ver = NHI_VER_1_0;
+	} else if (caps.version_major == 2 && caps.version_minor == 0) {
+		tb_printf(sc, "Host interface is version 2.0\n");
+		sc->ver = NHI_VER_2_0;
+	} else {
+		tb_printf(sc, "WARN: unexpected host interface version %d.%d -"
+		    " assuming 1.0\n", caps.version_major, caps.version_minor);
+		sc->ver = NHI_VER_1_0;
+	}
+	tb_debug(sc, DBG_INIT|DBG_NOISY, "Total Paths= %d\n", caps.total_paths);
+	if (caps.total_paths == 0 || caps.total_paths > 21) {
 		tb_printf(sc, "WARN: unexpected number of paths: %d\n", val);
 		/* return (ENXIO); */
 	}
 	sc->path_count = val;
+
+	nhi_reset(sc);
 
 	SLIST_INIT(&sc->ring_list);
 
@@ -788,7 +871,10 @@ nhi_tx_schedule(struct nhi_ring_pair *r, struct nhi_cmd_frame *cmd)
 int
 nhi_tx_synchronous(struct nhi_ring_pair *r, struct nhi_cmd_frame *cmd)
 {
+	struct nhi_softc *sc __diagused;
 	int error, count;
+
+	sc = r->sc;
 
 	if ((error = nhi_tx_schedule(r, cmd)) != 0)
 		return (error);
@@ -812,16 +898,16 @@ nhi_tx_synchronous(struct nhi_ring_pair *r, struct nhi_cmd_frame *cmd)
 	if ((cmd->flags & CMD_REQ_COMPLETE) == 0)
 		error = ETIMEDOUT;
 
-	tb_debug(r->sc, DBG_TXQ|DBG_FULL, "tx_synchronous done waiting, "
+	tb_debug(sc, DBG_TXQ|DBG_FULL, "tx_synchronous done waiting, "
 	    "err= %d, TX_COMPLETE= %d\n", error,
 	    !!(cmd->flags & CMD_REQ_COMPLETE));
 
 	if (error == ERESTART) {
-		tb_printf(r->sc, "TX command interrupted\n");
+		tb_printf(sc, "TX command interrupted\n");
 	} else if ((error == EWOULDBLOCK) || (error == ETIMEDOUT)) {
-		tb_printf(r->sc, "TX command timed out\n");
+		tb_printf(sc, "TX command timed out\n");
 	} else if (error != 0) {
-		tb_printf(r->sc, "TX command failed error= %d\n", error);
+		tb_printf(sc, "TX command failed error= %d\n", error);
 	}
 
 	return (error);
@@ -831,7 +917,7 @@ static int
 nhi_tx_complete(struct nhi_ring_pair *r, struct nhi_tx_buffer_desc *desc,
     struct nhi_cmd_frame *cmd)
 {
-	struct nhi_softc *sc;
+	struct nhi_softc *sc __maybe_unused;
 	struct nhi_pdf_dispatch *txpdf;
 	u_int sof;
 
@@ -865,9 +951,10 @@ static int
 nhi_rx_complete(struct nhi_ring_pair *r, struct nhi_rx_post_desc *desc,
     struct nhi_cmd_frame *cmd)
 {
-	struct nhi_softc *sc;
+	struct nhi_softc *sc __maybe_unused;
 	struct nhi_pdf_dispatch *rxpdf;
-	u_int eof, len;
+	u_int eof;
+	u_int len __maybe_unused;
 
 	sc = r->sc;
 	eof = desc->eof_len >> RX_BUFFER_DESC_EOF_SHIFT;
@@ -1009,6 +1096,16 @@ nhi_intr(void *data)
 	    trkr->vector);
 	if ((r = trkr->ring) == NULL)
 		return;
+
+	/*
+	 * Need to read this necessarily to clear it; see 12.6.3.4.1.  Disable
+	 * ISR Auto-Clear must be set to 0.
+	 *
+	 * XXX This might not be necessary on all platforms.  It is on Pink
+	 * Sardine, but this was not being done previously so it might have
+	 * been working without this on whatever scottl@ was testing on.
+	 */
+	nhi_read_reg(sc, NHI_ISR0);
 
 	/*
 	 * Process TX completions from the adapter.  Only go through

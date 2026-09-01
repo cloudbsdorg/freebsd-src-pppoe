@@ -146,6 +146,7 @@
 #include <vm/uma.h>
 
 #include <machine/asan.h>
+#include <machine/cpu.h>
 #include <machine/cpu_feat.h>
 #include <machine/elf.h>
 #include <machine/ifunc.h>
@@ -358,6 +359,7 @@ struct pv_chunks_list __exclusive_cache_line pv_chunks[PMAP_MEMDOM];
 vm_paddr_t dmap_phys_base;	/* The start of the dmap region */
 vm_paddr_t dmap_phys_max;	/* The limit of the dmap region */
 vm_offset_t dmap_max_addr;	/* The virtual address limit of the dmap */
+static int dmap_attr = VM_MEMATTR_WRITE_BACK;
 
 extern pt_entry_t pagetable_l0_ttbr1[];
 
@@ -451,6 +453,70 @@ void (*pmap_stage2_invalidate_all)(uint64_t);
 #define	TLBI_VA_MASK			((1ul << 44) - 1)
 #define	TLBI_VA(addr)			(((addr) >> TLBI_VA_SHIFT) & TLBI_VA_MASK)
 
+/*
+ * The operand to a range-based TLBI instruction has the following fields:
+ *
+ *   63      48 47   46 45    44 43    39 38    37 36              0
+ *  +----------+-------+--------+--------+--------+-----------------+
+ *  |   ASID   |  TG   | SCALE  |  NUM   |  TTL   |    BaseADDR     |
+ *  +----------+-------+--------+--------+--------+-----------------+
+ *
+ * A single range-based TLBI instruction invalidates the TLB entries for the
+ * mappings within the address range
+ *
+ *	[BaseADDR, BaseADDR + (NUM + 1) * 2^(5 * SCALE + 1) * PAGE_SIZE)
+ *
+ * BaseADDR is VA[48:PAGE_SHIFT], unless 52-bit addressing is enabled, i.e.,
+ * pmap_lpa_enabled is true, in which case BaseADDR is VA[52:16] regardless
+ * of the page size.  Consequently, when pmap_lpa_enabled is true, the start
+ * of the address range must be 64KB aligned, and any leading pages must be
+ * invalidated individually.
+ *
+ * TTL optionally specifies the translation table level at which every
+ * mapping within the address range can be found; we currently set TTL to 0,
+ * meaning that we are not providing a hint.
+ *
+ * A single instruction invalidates some number of units, where a unit is
+ * 2^(5 * SCALE + 1) pages.  NUM is that number minus 1.
+ *
+ * TG specifies the translation granule size, i.e., PAGE_SIZE.
+ */
+#define	TLBI_RANGE_VA_SHIFT()		(pmap_lpa_enabled ? 16 : PAGE_SHIFT)
+
+#define	TLBI_RANGE_BADDR_MASK		((1ul << 37) - 1)
+#define	TLBI_RANGE_NUM_SHIFT		39
+#define	TLBI_RANGE_SCALE_SHIFT		44
+#define	TLBI_RANGE_TG_SHIFT		46
+
+#define	TLBI_RANGE_MAX_UNITS		32
+#define	TLBI_RANGE_MAX_SCALE		3
+
+#define	TLBI_RANGE_UNIT_SHIFT(scale)	(5 * (scale) + 1)
+#define	TLBI_RANGE_UNIT(scale)		(1ul << TLBI_RANGE_UNIT_SHIFT(scale))
+
+/*
+ * The largest scale such that a unit fits within the given number of pages,
+ * i.e., the largest scale such that TLBI_RANGE_UNIT(scale) <= pages.  The
+ * given number of pages must be at least TLBI_RANGE_UNIT(0).
+ */
+#define	TLBI_RANGE_SCALE(pages)						\
+	imin((flsl(pages) - 2) / 5, TLBI_RANGE_MAX_SCALE)
+
+#if PAGE_SIZE == PAGE_SIZE_4K
+#define	TLBI_RANGE_TG			(1ul << TLBI_RANGE_TG_SHIFT)
+#elif PAGE_SIZE == PAGE_SIZE_16K
+#define	TLBI_RANGE_TG			(2ul << TLBI_RANGE_TG_SHIFT)
+#else
+#error Unsupported page size
+#endif
+
+#define	TLBI_RANGE_FIELDS(va, va_shift, num, scale)			\
+	(TLBI_RANGE_TG | ((u_long)(scale) << TLBI_RANGE_SCALE_SHIFT) |	\
+	((u_long)(num) << TLBI_RANGE_NUM_SHIFT) |			\
+	(((va) >> (va_shift)) & TLBI_RANGE_BADDR_MASK))
+
+static bool __read_frequently pmap_tlbi_range_support = false;
+
 static int __read_frequently superpages_enabled = 1;
 SYSCTL_INT(_vm_pmap, OID_AUTO, superpages_enabled,
     CTLFLAG_RDTUN | CTLFLAG_NOFETCH, &superpages_enabled, 0,
@@ -483,7 +549,7 @@ static void pmap_abort_ptp(pmap_t pmap, vm_offset_t va, vm_page_t mpte);
 static bool pmap_activate_int(struct thread *td, pmap_t pmap);
 static void pmap_alloc_asid(pmap_t pmap);
 static int pmap_change_props_locked(void *addr, vm_size_t size,
-    vm_prot_t prot, int mode, bool skip_unmapped);
+    vm_prot_t prot, int mode, int old_mode, bool skip_unmapped);
 static bool pmap_copy_l3c(pmap_t pmap, pt_entry_t *l3p, vm_offset_t va,
     pt_entry_t l3e, vm_page_t ml3, struct rwlock **lockp);
 static pt_entry_t *pmap_demote_l1(pmap_t pmap, pt_entry_t *l1, vm_offset_t va);
@@ -526,7 +592,7 @@ static void _pmap_unwire_l3(pmap_t pmap, vm_offset_t va, vm_page_t m,
     struct spglist *free);
 static int pmap_unuse_pt(pmap_t, vm_offset_t, pd_entry_t, struct spglist *);
 static void pmap_update_entry(pmap_t pmap, pd_entry_t *pte, pd_entry_t newpte,
-    vm_offset_t va, vm_size_t size);
+    vm_offset_t va, vm_size_t size, bool final_only);
 static __inline vm_page_t pmap_remove_pt_page(pmap_t pmap, vm_offset_t va);
 
 static uma_zone_t pmap_bti_ranges_zone;
@@ -1586,6 +1652,7 @@ pmap_page_init(vm_page_t m)
 
 	TAILQ_INIT(&m->md.pv_list);
 	m->md.pv_memattr = VM_MEMATTR_WRITE_BACK;
+	m->md.pv_flags = 0;
 }
 
 static void
@@ -1766,20 +1833,62 @@ static cpu_feat_en
 pmap_multiple_tlbi_check(const struct cpu_feat *feat __unused, u_int midr)
 {
 	/*
+	 * ARM C1-Premium erratum 4193780
+	 * ARM C1-Ultra erratum 4193780
+	 * ARM Cortex-A76 erratum 4193800
+	 * ARM Cortex-A76AE erratum 4193801
+	 * ARM Cortex-A77 erratum 4193798
+	 * ARM Cortex-A78 erratum 4193791
+	 * ARM Cortex-A78AE erratum 4193793
+	 * ARM Cortex-A78C erratum 4193794
+	 * ARM Cortex-A710 erratum 4193788
+	 * ARM Cortex-X1 erratum 4193791
+	 * ARM Cortex-X1C erratum 4193792
+	 * ARM Cortex-X2 erratum 4193788
+	 * ARM Cortex-X3 erratum 4193786
+	 * ARM Cortex-X4 erratum 4118414
+	 * ARM Cortex-X925 erratum 4193781
+	 * ARM Neoverse-N1 erratum 4193800
+	 * ARM Neoverse-N2 erratum 4193789
+	 * ARM Neoverse-V1 erratum 4193790
+	 * ARM Neoverse-V2 erratum 4193787
+	 * ARM Neoverse-V3 erratum 4193784
+	 * ARM Neoverse-V3AE erratum 4193784
+	 * Present in all revisions
+	 */
+	if (CPU_IMPL(midr) == CPU_IMPL_ARM) {
+		switch(CPU_PART(midr)) {
+		case CPU_PART_C1_PREMIUM:
+		case CPU_PART_C1_ULTRA:
+		case CPU_PART_CORTEX_A76:
+		case CPU_PART_CORTEX_A76AE:
+		case CPU_PART_CORTEX_A77:
+		case CPU_PART_CORTEX_A78:
+		case CPU_PART_CORTEX_A78AE:
+		case CPU_PART_CORTEX_A78C:
+		case CPU_PART_CORTEX_A710:
+		case CPU_PART_CORTEX_X1:
+		case CPU_PART_CORTEX_X1C:
+		case CPU_PART_CORTEX_X2:
+		case CPU_PART_CORTEX_X3:
+		case CPU_PART_CORTEX_X4:
+		case CPU_PART_CORTEX_X925:
+		case CPU_PART_NEOVERSE_N1:
+		case CPU_PART_NEOVERSE_N2:
+		case CPU_PART_NEOVERSE_V1:
+		case CPU_PART_NEOVERSE_V2:
+		case CPU_PART_NEOVERSE_V3:
+		case CPU_PART_NEOVERSE_V3AE:
+			return (FEAT_DEFAULT_ENABLE);
+		}
+	}
+
+	/*
 	 * Cortex-A55 erratum 2441007 (Cat B rare)
 	 * Present in all revisions
 	 */
 	if (CPU_IMPL(midr) == CPU_IMPL_ARM &&
 	    CPU_PART(midr) == CPU_PART_CORTEX_A55)
-		return (FEAT_DEFAULT_DISABLE);
-
-	/*
-	 * Cortex-A76 erratum 1286807 (Cat B rare)
-	 * Present in r0p0 - r3p0
-	 * Fixed in r3p1
-	 */
-	if (midr_check_var_part_range(midr, CPU_IMPL_ARM, CPU_PART_CORTEX_A76,
-	    0, 0, 3, 0))
 		return (FEAT_DEFAULT_DISABLE);
 
 	/*
@@ -1806,6 +1915,40 @@ pmap_multiple_tlbi_enable(const struct cpu_feat *feat __unused,
 CPU_FEAT(errata_multi_tlbi, "Multiple TLBI errata",
     pmap_multiple_tlbi_check, NULL, pmap_multiple_tlbi_enable, NULL,
     CPU_FEAT_EARLY_BOOT | CPU_FEAT_PER_CPU);
+
+static cpu_feat_en
+pmap_tlbi_range_check(const struct cpu_feat *feat __unused, u_int midr __unused)
+{
+	uint64_t reg;
+
+	/*
+	 * Range-based TLBI must be supported by every processor, so this
+	 * check is performed CPU_FEAT_AFTER_DEV.
+	 */
+	get_kernel_reg(ID_AA64ISAR0_EL1, &reg);
+	if (ID_AA64ISAR0_TLB_VAL(reg) >= ID_AA64ISAR0_TLB_TLBIOSR)
+		return (FEAT_DEFAULT_ENABLE);
+
+	return (FEAT_ALWAYS_DISABLE);
+}
+
+static bool
+pmap_tlbi_range_enable(const struct cpu_feat *feat __unused,
+    cpu_feat_errata errata_status __unused, u_int *errata_list __unused,
+    u_int errata_count __unused)
+{
+	/*
+	 * pmap_lpa_enabled must be initialized before range-based TLBI can
+	 * be performed.
+	 */
+	MPASS((READ_SPECIALREG(tcr_el1) & TCR_DS) == 0 || pmap_lpa_enabled);
+	pmap_tlbi_range_support = true;
+	return (true);
+}
+
+CPU_FEAT(feat_tlbi_range, "Range-based TLBI invalidation",
+    pmap_tlbi_range_check, NULL, pmap_tlbi_range_enable, NULL,
+    CPU_FEAT_AFTER_DEV | CPU_FEAT_SYSTEM);
 
 /*
  *	Initialize the pmap module.
@@ -1946,6 +2089,36 @@ pmap_s1_invalidate_user(uint64_t r, bool final_only)
 }
 
 /*
+ * The range-based counterparts to the above.  These may only be performed when
+ * pmap_tlbi_range_support is true.
+ */
+static __inline void
+pmap_s1_invalidate_range_kernel(uint64_t r, bool final_only)
+{
+	if (final_only)
+		__asm __volatile(".arch_extension tlb-rmi	\n"
+		    "tlbi rvaale1is, %0				\n"
+		    ".arch_extension notlb-rmi" : : "r" (r));
+	else
+		__asm __volatile(".arch_extension tlb-rmi	\n"
+		    "tlbi rvaae1is, %0				\n"
+		    ".arch_extension notlb-rmi" : : "r" (r));
+}
+
+static __inline void
+pmap_s1_invalidate_range_user(uint64_t r, bool final_only)
+{
+	if (final_only)
+		__asm __volatile(".arch_extension tlb-rmi	\n"
+		    "tlbi rvale1is, %0				\n"
+		    ".arch_extension notlb-rmi" : : "r" (r));
+	else
+		__asm __volatile(".arch_extension tlb-rmi	\n"
+		    "tlbi rvae1is, %0				\n"
+		    ".arch_extension notlb-rmi" : : "r" (r));
+}
+
+/*
  * Invalidates any cached final- and optionally intermediate-level TLB entries
  * for the specified virtual address in the given virtual address space.
  */
@@ -1991,6 +2164,56 @@ pmap_invalidate_page(pmap_t pmap, vm_offset_t va, bool final_only)
 }
 
 /*
+ * Invalidates the TLB entries for the mappings in the address range [sva,
+ * eva), using range-based instructions where possible and single-page
+ * instructions otherwise.  When range-based invalidation is supported, the
+ * address range is covered by as few TLBI instructions as possible: the
+ * largest scale whose unit fits within the remaining address range is
+ * selected, and up to TLBI_RANGE_MAX_UNITS units are invalidated per
+ * instruction.  An address that cannot be encoded as a BaseADDR, because
+ * pmap_lpa_enabled is true and the address is not 64KB aligned, is detected
+ * using va_mask and invalidated one stride at a time.
+ */
+static __always_inline void
+pmap_s1_invalidate_loop(vm_offset_t sva, vm_offset_t eva, vm_offset_t stride,
+    int va_shift, vm_offset_t va_mask, uint64_t asid, bool kernel,
+    bool final_only)
+{
+	uint64_t units;
+	vm_size_t pages;
+	int scale, unit_shift;
+
+	for (vm_offset_t va = sva; va < eva;) {
+		if (pmap_tlbi_range_support && (va & va_mask) == 0) {
+			pages = atop(eva - va);
+			if (pages >= TLBI_RANGE_UNIT(0)) {
+				scale = TLBI_RANGE_SCALE(pages);
+				unit_shift = TLBI_RANGE_UNIT_SHIFT(scale);
+				units = ulmin(pages >> unit_shift,
+				    TLBI_RANGE_MAX_UNITS);
+				if (kernel)
+					pmap_s1_invalidate_range_kernel(asid |
+					    TLBI_RANGE_FIELDS(va, va_shift,
+					    units - 1, scale), final_only);
+				else
+					pmap_s1_invalidate_range_user(asid |
+					    TLBI_RANGE_FIELDS(va, va_shift,
+					    units - 1, scale), final_only);
+				va += ptoa(units << unit_shift);
+				continue;
+			}
+		}
+		if (kernel)
+			pmap_s1_invalidate_kernel(asid | TLBI_VA(va),
+			    final_only);
+		else
+			pmap_s1_invalidate_user(asid | TLBI_VA(va),
+			    final_only);
+		va += stride;
+	}
+}
+
+/*
  * Use stride L{1,2}_SIZE when invalidating the TLB entries for L{1,2}_BLOCK
  * mappings.  Otherwise, use stride L3_SIZE.
  */
@@ -1998,22 +2221,22 @@ static __inline void
 pmap_s1_invalidate_strided(pmap_t pmap, vm_offset_t sva, vm_offset_t eva,
     vm_offset_t stride, bool final_only)
 {
-	uint64_t end, r, start;
+	uint64_t asid;
+	vm_offset_t va_mask;
+	int va_shift;
 
 	PMAP_ASSERT_STAGE1(pmap);
-
+	va_shift = TLBI_RANGE_VA_SHIFT();
+	/* va_mask will be 0 unless pmap_lpa_enabled is true. */
+	va_mask = (1ul << va_shift) - PAGE_SIZE;
 	dsb(ishst);
 	if (pmap == kernel_pmap) {
-		start = TLBI_VA(sva);
-		end = TLBI_VA(eva);
-		for (r = start; r < end; r += TLBI_VA(stride))
-			pmap_s1_invalidate_kernel(r, final_only);
+		pmap_s1_invalidate_loop(sva, eva, stride, va_shift, va_mask,
+		    0, true, final_only);
 	} else {
-		start = end = ASID_TO_OPERAND(COOKIE_TO_ASID(pmap->pm_cookie));
-		start |= TLBI_VA(sva);
-		end |= TLBI_VA(eva);
-		for (r = start; r < end; r += TLBI_VA(stride))
-			pmap_s1_invalidate_user(r, final_only);
+		asid = ASID_TO_OPERAND(COOKIE_TO_ASID(pmap->pm_cookie));
+		pmap_s1_invalidate_loop(sva, eva, stride, va_shift, va_mask,
+		    asid, false, final_only);
 	}
 	if (pmap_multiple_tlbi) {
 		dsb(ish);
@@ -2423,7 +2646,7 @@ pmap_kenter(vm_offset_t sva, vm_size_t size, vm_paddr_t pa, int mode)
 				 */
 				pmap_update_entry(kernel_pmap, pde,
 				    PHYS_TO_PTE(pa) | attr | L2_BLOCK, va,
-				    PAGE_SIZE);
+				    PAGE_SIZE, false);
 			}
 			PMAP_UNLOCK(kernel_pmap);
 			if (error == 0) {
@@ -4858,11 +5081,15 @@ pmap_remove_pt_page(pmap_t pmap, vm_offset_t va)
 /*
  * Performs a break-before-make update of a pmap entry. This is needed when
  * either promoting or demoting pages to ensure the TLB doesn't get into an
- * inconsistent state.
+ * inconsistent state.  The caller must pass false for "final_only" when
+ * promoting, because the TLB might be caching an intermediate entry that
+ * references the L{1,2}_TABLE that is being replaced.  In contrast, when
+ * demoting or the PTE's type isn't changing, no cached intermediate entry
+ * needs to change, so the caller should pass true as an optimization.
  */
-static void
+static __always_inline void
 pmap_update_entry(pmap_t pmap, pd_entry_t *ptep, pd_entry_t newpte,
-    vm_offset_t va, vm_size_t size)
+    vm_offset_t va, vm_size_t size, bool final_only)
 {
 	register_t intr;
 
@@ -4885,11 +5112,10 @@ pmap_update_entry(pmap_t pmap, pd_entry_t *ptep, pd_entry_t newpte,
 	pmap_clear_bits(ptep, ATTR_DESCR_VALID);
 
 	/*
-	 * When promoting, the L{1,2}_TABLE entry that is being replaced might
-	 * be cached, so we invalidate intermediate entries as well as final
-	 * entries.
+	 * We always inline pmap_update_entry() so that constant propagation
+	 * and dead code elimination will specialize the following code.
 	 */
-	pmap_s1_invalidate_range(pmap, va, va + size, false);
+	pmap_s1_invalidate_range(pmap, va, va + size, final_only);
 
 	/* Create the new mapping */
 	pmap_store(ptep, newpte);
@@ -5123,7 +5349,8 @@ setl3:
 	if ((newl2 & ATTR_SW_MANAGED) != 0)
 		pmap_pv_promote_l2(pmap, va, PTE_TO_PHYS(newl2), lockp);
 
-	pmap_update_entry(pmap, l2, newl2 | L2_BLOCK, va & ~L2_OFFSET, L2_SIZE);
+	pmap_update_entry(pmap, l2, newl2 | L2_BLOCK, va & ~L2_OFFSET, L2_SIZE,
+	    false);
 
 	counter_u64_add(pmap_l2_promotions, 1);
 	CTR2(KTR_PMAP, "pmap_promote_l2: success for va %#lx in pmap %p", va,
@@ -6920,6 +7147,7 @@ pmap_zero_page(vm_page_t m)
 	void *va = VM_PAGE_TO_DMAP(m);
 
 	pagezero(va);
+	m->md.pv_flags &= ~PV_MTE_TAGGED;
 }
 
 /*
@@ -6942,7 +7170,7 @@ pmap_zero_page_area(vm_page_t m, int off, int size)
 /*
  *	pmap_copy_page copies the specified (machine independent)
  *	page by mapping the page into virtual memory and using
- *	bcopy to copy the page, one machine dependent page at a
+ *	memcpy to copy the page, one machine dependent page at a
  *	time.
  */
 void
@@ -6950,6 +7178,15 @@ pmap_copy_page(vm_page_t msrc, vm_page_t mdst)
 {
 	void *src = VM_PAGE_TO_DMAP(msrc);
 	void *dst = VM_PAGE_TO_DMAP(mdst);
+
+	/*
+	 * On a page copy, check whether the src page is tagged. If it is,
+	 * we must copy the tags before copying the contents of the page.
+	 */
+	if ((msrc->md.pv_flags & PV_MTE_TAGGED) != 0)
+		mte_copy_tags(msrc, mdst, src, dst);
+	else
+		mdst->md.pv_flags &= ~PV_MTE_TAGGED;
 
 	pagecopy(src, dst);
 }
@@ -6967,6 +7204,9 @@ pmap_copy_pages(vm_page_t ma[], vm_offset_t a_offset, vm_page_t mb[],
 	int cnt;
 
 	while (xfersize > 0) {
+		KASSERT(ADDR_IS_CANONICAL(a_offset),
+		    ("%s: Address not in canonical form: %lx", __func__, a_offset));
+
 		a_pg_offset = a_offset & PAGE_MASK;
 		m_a = ma[a_offset >> PAGE_SHIFT];
 		p_a = m_a->phys_addr;
@@ -6985,7 +7225,7 @@ pmap_copy_pages(vm_page_t ma[], vm_offset_t a_offset, vm_page_t mb[],
 		} else {
 			b_cp = (char *)PHYS_TO_DMAP(p_b) + b_pg_offset;
 		}
-		bcopy(a_cp, b_cp, cnt);
+		memcpy(b_cp, a_cp, cnt);
 		a_offset += cnt;
 		b_offset += cnt;
 		xfersize -= cnt;
@@ -8161,7 +8401,7 @@ pmap_unmapbios(void *p, vm_size_t size)
 		/* Ensure the attributes are as expected for the DMAP region */
 		PMAP_LOCK(kernel_pmap);
 		error = pmap_change_props_locked(va, size,
-		    PROT_READ | PROT_WRITE, VM_MEMATTR_DEFAULT, false);
+		    PROT_READ | PROT_WRITE, VM_MEMATTR_DEFAULT, -1, false);
 		PMAP_UNLOCK(kernel_pmap);
 		KASSERT(error == 0, ("%s: Failed to reset DMAP attributes: %d",
 		    __func__, error));
@@ -8267,7 +8507,25 @@ pmap_change_attr(void *va, vm_size_t size, int mode)
 	int error;
 
 	PMAP_LOCK(kernel_pmap);
-	error = pmap_change_props_locked(va, size, PROT_NONE, mode, false);
+	error = pmap_change_props_locked(va, size, PROT_NONE, mode, -1, false);
+	PMAP_UNLOCK(kernel_pmap);
+	return (error);
+}
+
+int
+pmap_change_dmap_attr(int mode)
+{
+	int error;
+
+	KASSERT(mode == VM_MEMATTR_WRITE_BACK ||
+	    mode == VM_MEMATTR_TAGGED,
+	    ("%s: mode %d must be compatible with write-back", __func__, mode));
+
+	PMAP_LOCK(kernel_pmap);
+	error = pmap_change_props_locked((void *)DMAP_MIN_ADDRESS,
+	    dmap_max_addr - DMAP_MIN_ADDRESS, PROT_NONE, mode, dmap_attr, true);
+	if (error == 0)
+		dmap_attr = mode;
 	PMAP_UNLOCK(kernel_pmap);
 	return (error);
 }
@@ -8289,20 +8547,20 @@ pmap_change_prot(void *va, vm_size_t size, vm_prot_t prot)
 		return (EINVAL);
 
 	PMAP_LOCK(kernel_pmap);
-	error = pmap_change_props_locked(va, size, prot, -1, false);
+	error = pmap_change_props_locked(va, size, prot, -1, -1, false);
 	PMAP_UNLOCK(kernel_pmap);
 	return (error);
 }
 
 static int
 pmap_change_props_locked(void *addr, vm_size_t size, vm_prot_t prot,
-    int mode, bool skip_unmapped)
+    int mode, int old_mode, bool skip_unmapped)
 {
 	vm_offset_t base, offset, tmpva, va;
 	vm_size_t pte_size;
 	vm_paddr_t pa;
 	pt_entry_t pte, *ptep, *newpte;
-	pt_entry_t bits, mask;
+	pt_entry_t bits, mask, old_mode_bits, old_mode_mask;
 	char *tmpptep;
 	int lvl, rv;
 
@@ -8316,8 +8574,8 @@ pmap_change_props_locked(void *addr, vm_size_t size, vm_prot_t prot,
 	    !(base >= VM_MIN_KERNEL_ADDRESS && base < VM_MAX_KERNEL_ADDRESS))
 		return (EINVAL);
 
-	bits = 0;
-	mask = 0;
+	bits = old_mode_bits = 0;
+	mask = old_mode_mask = 0;
 	if (mode != -1) {
 		bits = ATTR_S1_IDX(mode);
 		mask = ATTR_S1_IDX_MASK;
@@ -8325,6 +8583,10 @@ pmap_change_props_locked(void *addr, vm_size_t size, vm_prot_t prot,
 			mask |= ATTR_S1_XN;
 			bits |= ATTR_S1_XN;
 		}
+	}
+	if (old_mode != -1) {
+		old_mode_bits = ATTR_S1_IDX(old_mode);
+		old_mode_mask = ATTR_S1_IDX_MASK;
 	}
 	if (prot != VM_PROT_NONE) {
 		/* Don't mark the DMAP as executable. It never is on arm64. */
@@ -8353,11 +8615,14 @@ pmap_change_props_locked(void *addr, vm_size_t size, vm_prot_t prot,
 		if (ptep == NULL && !skip_unmapped) {
 			return (EINVAL);
 		} else if ((ptep == NULL && skip_unmapped) ||
-		    (pmap_load(ptep) & mask) == bits) {
+		    (pmap_load(ptep) & mask) == bits ||
+		    (pmap_load(ptep) & old_mode_mask) != old_mode_bits) {
 			/*
-			 * We already have the correct attribute or there
-			 * is no memory mapped at this address and we are
-			 * skipping unmapped memory.
+			 * We already have one of the following meaning
+			 * we can skip this memory region::
+			 *  - No memory mapped at this address
+			 *  - The new attributes are already set
+			 *  - The expected attributes are incorrect
 			 */
 			switch (lvl) {
 			default:
@@ -8474,7 +8739,7 @@ pmap_change_props_locked(void *addr, vm_size_t size, vm_prot_t prot,
 				 * performed.
 				 */
 				pmap_update_entry(kernel_pmap, ptep, pte, tmpva,
-				    PAGE_SIZE);
+				    PAGE_SIZE, true);
 				break;
 			}
 
@@ -8487,12 +8752,24 @@ pmap_change_props_locked(void *addr, vm_size_t size, vm_prot_t prot,
 
 			pa = PTE_TO_PHYS(pte);
 			if (!VIRT_IN_DMAP(tmpva) && PHYS_IN_DMAP(pa)) {
+				int dmap_mode;
+
+				/*
+				 * When booting on HW with MTE enabled we may
+				 * need to swap to a tagged type for the DMAP
+				 * to allow tags to be set through it.
+				 */
+				if (mode == VM_MEMATTR_WRITE_BACK)
+					dmap_mode = dmap_attr;
+				else
+					dmap_mode = mode;
+
 				/*
 				 * Keep the DMAP memory in sync.
 				 */
 				rv = pmap_change_props_locked(
 				    PHYS_TO_DMAP(pa), pte_size,
-				    prot, mode, true);
+				    prot, dmap_mode, old_mode, true);
 				if (rv != 0)
 					return (rv);
 			}
@@ -8574,7 +8851,7 @@ pmap_demote_l1(pmap_t pmap, pt_entry_t *l1, vm_offset_t va)
 		l1 = (pt_entry_t *)(tmpl1 + ((vm_offset_t)l1 & PAGE_MASK));
 	}
 
-	pmap_update_entry(pmap, l1, l2phys | L1_TABLE, va, PAGE_SIZE);
+	pmap_update_entry(pmap, l1, l2phys | L1_TABLE, va, PAGE_SIZE, true);
 
 	counter_u64_add(pmap_l1_demotions, 1);
 fail:
@@ -8784,7 +9061,7 @@ pmap_demote_l2_locked(pmap_t pmap, pt_entry_t *l2, vm_offset_t va,
 	 * Pass PAGE_SIZE so that a single TLB invalidation is performed on
 	 * the 2MB page mapping.
 	 */
-	pmap_update_entry(pmap, l2, l3phys | L2_TABLE, va, PAGE_SIZE);
+	pmap_update_entry(pmap, l2, l3phys | L2_TABLE, va, PAGE_SIZE, true);
 
 	/*
 	 * Demote the PV entry.

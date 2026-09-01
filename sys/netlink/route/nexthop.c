@@ -173,7 +173,7 @@ nl_find_nhop(uint32_t fibnum, int family, uint32_t uidx,
 	CHT_SLIST_FIND_BYOBJ(&ctl->un_head, unhop, &key, unhop);
 	if (unhop != NULL) {
 		struct nhop_object *nh = unhop->un_nhop;
-		UN_RLOCK(ctl);
+		UN_RUNLOCK(ctl);
 		*perror = 0;
 		nhop_ref_any(nh);
 		return (nh);
@@ -808,6 +808,28 @@ nl_set_nexthop_gw(struct nhop_object *nh, struct sockaddr *gw, if_t ifp,
 	}
 #endif
 	nhop_set_gw(nh, gw, true);
+	return (0);
+}
+
+/*
+ * Sets nexthop @nh prefsrc specified by @src.
+ * Returns 0 on success or errno.
+ */
+int
+nl_set_nexthop_prefsrc(struct nhop_object *nh, struct sockaddr *src)
+{
+	struct ifaddr *ifa = NULL;
+	int fibnum = nhop_get_fibnum(nh);
+
+	MPASS(src != NULL);
+
+	ifa = ifa_ifwithaddr_fib(src, fibnum);
+	if (ifa == NULL)
+		return (EINVAL);
+
+	nhop_set_src(nh, ifa);
+	nh->nh_flags |= NHF_PREFSRC;
+
 	return (0);
 }
 

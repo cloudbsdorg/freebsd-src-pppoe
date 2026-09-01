@@ -65,6 +65,7 @@ struct	sysentvec;
 struct trapframe;
 
 void	amd64_conf_fast_syscall(void);
+void	amd64_cpu_init_fred(void);
 void	amd64_db_resume_dbreg(void);
 vm_paddr_t amd64_loadaddr(void);
 void	amd64_lower_shared_page(struct sysentvec *);
@@ -94,7 +95,6 @@ void	gsbase_load_fault(void) __asm(__STRING(gsbase_load_fault));
 void	fpstate_drop(struct thread *td);
 void	pagezero(void *addr);
 void	setidt(int idx, alias_for_inthand_t *func, int typ, int dpl, int ist);
-void	set_top_of_stack_td(struct thread *td);
 struct savefpu *get_pcb_user_save_td(struct thread *td);
 struct savefpu *get_pcb_user_save_pcb(struct pcb *pcb);
 void	pci_early_quirks(void);
@@ -106,6 +106,12 @@ int	set_fpcontext(struct thread *td, struct __mcontext *mcp,
 void	wrmsr_early_safe_start(void);
 void	wrmsr_early_safe_end(void);
 int	wrmsr_early_safe(u_int msr, uint64_t data);
+
+enum uiomove_mem_req {
+	UIO_MEM_KMEM = 101,
+	UIO_MEM_MEM,
+};
+int uiomove_mem(enum uiomove_mem_req req, struct uio *uio);
 
 #endif /* !_MACHINE_MD_VAR_H_ */
 

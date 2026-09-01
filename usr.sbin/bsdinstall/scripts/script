@@ -50,6 +50,7 @@ f_include $BSDCFG_SHARE/variable.subr
 ############################################################ GLOBALS
 
 : ${TMPDIR:="/tmp"}
+: ${DISTRIBUTIONS=""}; export DISTRIBUTIONS
 
 #
 # Strings that should be moved to an i18n file and loaded with f_include_lang()
@@ -97,6 +98,7 @@ awk 'BEGIN {pathb=ARGV[2]; ARGV[2]=""} /^#!/{b=1} {
     "$SCRIPT" $TMPDIR/bsdinstall-installscript-setup \
     >$TMPDIR/bsdinstall-installscript-preamble
 
+: ${BSDINSTALL_LOG="${debugFile#+}"}
 . $TMPDIR/bsdinstall-installscript-preamble
 export BSDINSTALL_DISTDIR
 

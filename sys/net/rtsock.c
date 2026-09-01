@@ -1328,6 +1328,7 @@ rt_getmetrics(const struct rtentry *rt, const struct nhop_object *nh,
 	bzero(out, sizeof(*out));
 	out->rmx_mtu = nh->nh_mtu;
 	out->rmx_weight = rt->rt_weight;
+	out->rmx_metric = nhop_get_metric(nh);
 	out->rmx_nhidx = nhop_get_idx(nh);
 	/* Kernel -> userland timebase conversion. */
 	out->rmx_expire = nhop_get_expire(nh) ?
@@ -2622,7 +2623,7 @@ sysctl_rtsock(SYSCTL_HANDLER_ARGS)
 	} else if (namelen != 3)
 		return ((namelen < 3) ? EISDIR : ENOTDIR);
 	af = name[0];
-	if (af > AF_MAX)
+	if (af >= AF_MAX)
 		return (EINVAL);
 	bzero(&w, sizeof(w));
 	w.w_op = name[1];
@@ -2646,7 +2647,7 @@ sysctl_rtsock(SYSCTL_HANDLER_ARGS)
 	case NET_RT_FLAGS:
 		if (af == 0) {			/* dump all tables */
 			i = 1;
-			lim = AF_MAX;
+			lim = AF_MAX - 1;
 		} else				/* dump only one table */
 			i = lim = af;
 

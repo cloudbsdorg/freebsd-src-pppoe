@@ -360,6 +360,28 @@ linux_mprotect(struct thread *td, struct linux_mprotect_args *uap)
 }
 
 int
+linux_pkey_mprotect(struct thread *td, struct linux_pkey_mprotect_args *uap)
+{
+
+	return (linux_pkey_mprotect_common(td, uap->start, uap->len,
+	    uap->prot, uap->pkey));
+}
+
+int
+linux_pkey_alloc(struct thread *td, struct linux_pkey_alloc_args *uap)
+{
+
+	return (linux_pkey_alloc_common(td, uap->flags, uap->init_val));
+}
+
+int
+linux_pkey_free(struct thread *td, struct linux_pkey_free_args *uap)
+{
+
+	return (linux_pkey_free_common(td, uap->pkey));
+}
+
+int
 linux_madvise(struct thread *td, struct linux_madvise_args *uap)
 {
 
@@ -1545,8 +1567,8 @@ linux_exit_group(struct thread *td, struct linux_exit_group_args *args)
 	 * SIGNAL_EXIT_GROUP is set. We ignore that (temporarily?)
 	 * as it doesnt occur often.
 	 */
-	exit1(td, args->error_code, 0);
-		/* NOTREACHED */
+	kern_exit(td, args->error_code, 0);
+	return (0);
 }
 
 #define _LINUX_CAPABILITY_VERSION_1  0x19980330
@@ -1835,6 +1857,13 @@ linux_prctl(struct thread *td, struct linux_prctl_args *args)
 		linux_msg(td, "unsupported prctl PR_SET_PTRACER");
 		error = EINVAL;
 		break;
+	case LINUX_PR_SET_VMA:
+		if (args->arg2 != LINUX_PR_SET_VMA_ANON_NAME) {
+			linux_msg(td, "unsupported prctl PR_SET_VMA attr %ju",
+			    (uintmax_t)args->arg2);
+			error = EINVAL;
+		}
+		break;
 	default:
 		linux_msg(td, "unsupported prctl option %d", args->option);
 		error = EINVAL;
@@ -2031,6 +2060,7 @@ linux_prlimit64(struct thread *td, struct linux_prlimit64_args *args)
 	u_int which;
 	int flags;
 	int error;
+	bool exec_blocked;
 
 	if (args->new == NULL && args->old != NULL) {
 		if (linux_get_dummy_limit(td, args->resource, &rlim)) {
@@ -2058,6 +2088,7 @@ linux_prlimit64(struct thread *td, struct linux_prlimit64_args *args)
 			return (error);
 	}
 
+	exec_blocked = false;
 	flags = PGET_HOLD | PGET_NOTWEXIT;
 	if (args->new != NULL)
 		flags |= PGET_CANDEBUG;
@@ -2070,6 +2101,14 @@ linux_prlimit64(struct thread *td, struct linux_prlimit64_args *args)
 		error = pget(args->pid, flags, &p);
 		if (error != 0)
 			return (error);
+		exec_blocked = true;
+		PROC_LOCK(p);
+		execve_block_wait(td, p);
+		error = args->new != NULL ? p_candebug(td, p) :
+		    p_cansee(td, p);
+		PROC_UNLOCK(p);
+		if (error != 0)
+			goto out;
 	}
 	if (args->old != NULL) {
 		PROC_LOCK(p);
@@ -2092,6 +2131,11 @@ linux_prlimit64(struct thread *td, struct linux_prlimit64_args *args)
 		error = kern_proc_setrlimit(td, p, which, &nrlim);
 
  out:
+	if (exec_blocked) {
+		PROC_LOCK(p);
+		execve_unblock(td, p);
+		PROC_UNLOCK(p);
+	}
 	PRELE(p);
 	return (error);
 }

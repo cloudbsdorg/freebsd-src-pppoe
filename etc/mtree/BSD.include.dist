@@ -207,6 +207,8 @@
         ..
         ciss
         ..
+        coreboot
+        ..
         evdev
         ..
         filemon
@@ -234,6 +236,8 @@
         mpt
             mpilib
             ..
+        ..
+        ntsync
         ..
         nvme
         ..

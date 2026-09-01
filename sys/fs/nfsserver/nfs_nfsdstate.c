@@ -63,6 +63,7 @@ extern struct nfsdontlisthead nfsrv_dontlisthead;
 extern volatile int nfsrv_devidcnt;
 extern struct nfslayouthead nfsrv_recalllisthead;
 extern char *nfsrv_zeropnfsdat;
+extern uint64_t nfsrv_stripesiz;
 
 SYSCTL_DECL(_vfs_nfsd);
 int	nfsrv_statehashsize = NFSSTATEHASHSIZE;
@@ -236,7 +237,8 @@ static int nfsrv_fndclid(nfsquad_t *clidvec, nfsquad_t clid, int clidcnt);
 static struct nfslayout *nfsrv_filelayout(struct nfsrv_descript *nd, int iomode,
     fhandle_t *fhp, fhandle_t *dsfhp, char *devid, fsid_t fs);
 static struct nfslayout *nfsrv_flexlayout(struct nfsrv_descript *nd, int iomode,
-    int mirrorcnt, fhandle_t *fhp, fhandle_t *dsfhp, char *devid, fsid_t fs);
+    int mirrorcnt, uint64_t stripesiz, int stripecnt, fhandle_t *fhp,
+    fhandle_t *dsfhp, char *devid, fsid_t fs);
 static int nfsrv_dontlayout(fhandle_t *fhp);
 static int nfsrv_createdsfile(vnode_t vp, fhandle_t *fhp, struct pnfsdsfile *pf,
     vnode_t dvp, struct nfsdevice *ds, struct ucred *cred, NFSPROC_T *p,
@@ -251,6 +253,7 @@ static void nfsrv_issuedelegation(struct vnode *vp, struct nfsclient *clp,
     nfsv4stateid_t *delegstateidp);
 static void nfsrv_clientlock(bool mlocked);
 static void nfsrv_clientunlock(bool mlocked);
+static void nfsrv_freelockifnotinuse(struct nfslockfile *lfp);
 
 /*
  * Lock the client structure, either with the mutex or the exclusive nfsd lock.
@@ -1535,20 +1538,13 @@ nfsrv_freedeleglist(struct nfsstatehead *sthp)
 static void
 nfsrv_freedeleg(struct nfsstate *stp)
 {
-	struct nfslockfile *lfp;
 
 	LIST_REMOVE(stp, ls_hash);
 	LIST_REMOVE(stp, ls_list);
 	LIST_REMOVE(stp, ls_file);
 	if ((stp->ls_flags & NFSLCK_DELEGWRITE) != 0)
 		nfsrv_writedelegcnt--;
-	lfp = stp->ls_lfp;
-	if (LIST_EMPTY(&lfp->lf_open) &&
-	    LIST_EMPTY(&lfp->lf_lock) && LIST_EMPTY(&lfp->lf_deleg) &&
-	    LIST_EMPTY(&lfp->lf_locallock) && LIST_EMPTY(&lfp->lf_rollback) &&
-	    lfp->lf_usecount == 0 &&
-	    nfsv4_testlock(&lfp->lf_locallock_lck) == 0)
-		nfsrv_freenfslockfile(lfp);
+	nfsrv_freelockifnotinuse(stp->ls_lfp);
 	free(stp, M_NFSDSTATE);
 	VNET(nfsstatsv1_p)->srvdelegates--;
 	nfsrv_openpluslock--;
@@ -1630,12 +1626,7 @@ nfsrv_freeopen(struct nfsstate *stp, vnode_t vp, int cansleep, NFSPROC_T *p)
 	 * If there are locks associated with the open, the
 	 * nfslockfile structure can be freed via nfsrv_freelockowner().
 	 */
-	if (lfp != NULL && LIST_EMPTY(&lfp->lf_open) &&
-	    LIST_EMPTY(&lfp->lf_deleg) && LIST_EMPTY(&lfp->lf_lock) &&
-	    LIST_EMPTY(&lfp->lf_locallock) && LIST_EMPTY(&lfp->lf_rollback) &&
-	    lfp->lf_usecount == 0 &&
-	    nfsv4_testlock(&lfp->lf_locallock_lck) == 0)
-		nfsrv_freenfslockfile(lfp);
+	nfsrv_freelockifnotinuse(lfp);
 	free(stp, M_NFSDSTATE);
 	VNET(nfsstatsv1_p)->srvopens--;
 	nfsrv_openpluslock--;
@@ -1827,7 +1818,7 @@ nfsrv_lockctrl(vnode_t vp, struct nfsstate **new_stpp,
 	int specialid = 0;
 	struct nfslockfile *lfp;
 	struct nfslock *other_lop = NULL;
-	struct nfsstate *stp, *lckstp = NULL;
+	struct nfsstate *stp = NULL, *lckstp = NULL;	/* Shut up gcc. */
 	struct nfsclient *clp = NULL;
 	u_int32_t bits;
 	int error = 0, haslock = 0, ret, reterr;
@@ -6626,7 +6617,8 @@ nfsrv_layoutget(struct nfsrv_descript *nd, vnode_t vp, struct nfsexstuff *exp,
 	struct nfslayout *lyp;
 	char *devid;
 	fhandle_t fh, *dsfhp;
-	int error, mirrorcnt;
+	int error, mirrorcnt, stripecnt;
+	uint64_t stripesiz;
 
 	if (nfsrv_devidcnt == 0)
 		return (NFSERR_UNKNLAYOUTTYPE);
@@ -6723,9 +6715,8 @@ nfsrv_layoutget(struct nfsrv_descript *nd, vnode_t vp, struct nfsexstuff *exp,
 	NFSUNLOCKLAYOUT(lhyp);
 
 	/* Find the device id and file handle. */
-	dsfhp = malloc(sizeof(fhandle_t) * NFSDEV_MAXMIRRORS, M_TEMP, M_WAITOK);
-	devid = malloc(NFSX_V4DEVICEID * NFSDEV_MAXMIRRORS, M_TEMP, M_WAITOK);
-	error = nfsrv_dsgetdevandfh(vp, p, &mirrorcnt, dsfhp, devid);
+	error = nfsrv_dsgetdevandfh(vp, p, &mirrorcnt, &stripesiz, &stripecnt,
+	    &dsfhp, &devid);
 	NFSD_DEBUG(4, "layoutget devandfh=%d\n", error);
 	if (error == 0) {
 		if (layouttype == NFSLAYOUT_NFSV4_1_FILES) {
@@ -6735,11 +6726,11 @@ nfsrv_layoutget(struct nfsrv_descript *nd, vnode_t vp, struct nfsexstuff *exp,
 				lyp = nfsrv_filelayout(nd, *iomode, &fh, dsfhp,
 				    devid, vp->v_mount->mnt_stat.f_fsid);
 		} else {
-			if (NFSX_V4FLEXLAYOUT(mirrorcnt) > maxcnt)
+			if (NFSX_V4FLEXLAYOUT(mirrorcnt, stripecnt) > maxcnt)
 				error = NFSERR_TOOSMALL;
 			else
 				lyp = nfsrv_flexlayout(nd, *iomode, mirrorcnt,
-				    &fh, dsfhp, devid,
+				    stripesiz, stripecnt, &fh, dsfhp, devid,
 				    vp->v_mount->mnt_stat.f_fsid);
 		}
 	}
@@ -6814,15 +6805,16 @@ nfsrv_filelayout(struct nfsrv_descript *nd, int iomode, fhandle_t *fhp,
  */
 static struct nfslayout *
 nfsrv_flexlayout(struct nfsrv_descript *nd, int iomode, int mirrorcnt,
-    fhandle_t *fhp, fhandle_t *dsfhp, char *devid, fsid_t fs)
+    uint64_t stripesiz, int stripecnt, fhandle_t *fhp, fhandle_t *dsfhp,
+    char *devid, fsid_t fs)
 {
 	uint32_t *tl;
 	struct nfslayout *lyp;
-	uint64_t lenval;
-	int i;
+	int i, j;
 
-	lyp = malloc(sizeof(struct nfslayout) + NFSX_V4FLEXLAYOUT(mirrorcnt),
-	    M_NFSDSTATE, M_WAITOK | M_ZERO);
+	lyp = malloc(sizeof(struct nfslayout) +
+	    NFSX_V4FLEXLAYOUT(mirrorcnt, stripecnt), M_NFSDSTATE,
+	    M_WAITOK | M_ZERO);
 	lyp->lay_type = NFSLAYOUT_FLEXFILE;
 	if (iomode == NFSLAYOUTIOMODE_RW)
 		lyp->lay_flags = NFSLAY_RW;
@@ -6836,41 +6828,42 @@ nfsrv_flexlayout(struct nfsrv_descript *nd, int iomode, int mirrorcnt,
 
 	/* Fill in the xdr for the files layout. */
 	tl = (uint32_t *)lyp->lay_xdr;
-	lenval = 0;
-	txdr_hyper(lenval, tl); tl += 2;		/* Stripe unit. */
+	txdr_hyper(stripesiz, tl); tl += 2;		/* Stripe unit. */
 	*tl++ = txdr_unsigned(mirrorcnt);		/* # of mirrors. */
 	for (i = 0; i < mirrorcnt; i++) {
-		*tl++ = txdr_unsigned(1);		/* One stripe. */
-		NFSBCOPY(devid, tl, NFSX_V4DEVICEID);	/* Device ID. */
-		tl += (NFSX_V4DEVICEID / NFSX_UNSIGNED);
-		devid += NFSX_V4DEVICEID;
-		*tl++ = txdr_unsigned(1);		/* Efficiency. */
-		*tl++ = 0;				/* Proxy Stateid. */
-		*tl++ = 0x55555555;
-		*tl++ = 0x55555555;
-		*tl++ = 0x55555555;
-		*tl++ = txdr_unsigned(1);		/* 1 file handle. */
-		*tl++ = txdr_unsigned(NFSX_V4PNFSFH);
-		NFSBCOPY(dsfhp, tl, sizeof(*dsfhp));
-		tl += (NFSM_RNDUP(NFSX_V4PNFSFH) / NFSX_UNSIGNED);
-		dsfhp++;
-		if (nfsrv_flexlinuxhack != 0) {
-			*tl++ = txdr_unsigned(strlen(FLEX_UID0));
-			*tl = 0;		/* 0 pad string. */
-			NFSBCOPY(FLEX_UID0, tl++, strlen(FLEX_UID0));
-			*tl++ = txdr_unsigned(strlen(FLEX_UID0));
-			*tl = 0;		/* 0 pad string. */
-			NFSBCOPY(FLEX_UID0, tl++, strlen(FLEX_UID0));
-		} else {
-			*tl++ = txdr_unsigned(strlen(FLEX_OWNERID));
-			NFSBCOPY(FLEX_OWNERID, tl++, NFSX_UNSIGNED);
-			*tl++ = txdr_unsigned(strlen(FLEX_OWNERID));
-			NFSBCOPY(FLEX_OWNERID, tl++, NFSX_UNSIGNED);
+		*tl++ = txdr_unsigned(stripecnt);	/* Stripe cnt. */
+		for (j = 0; j < stripecnt; j++) {
+			NFSBCOPY(devid, tl, NFSX_V4DEVICEID);	/* Device ID. */
+			tl += (NFSX_V4DEVICEID / NFSX_UNSIGNED);
+			devid += NFSX_V4DEVICEID;
+			*tl++ = txdr_unsigned(1);	/* Efficiency. */
+			*tl++ = 0;			/* Proxy Stateid. */
+			*tl++ = 0x55555555;
+			*tl++ = 0x55555555;
+			*tl++ = 0x55555555;
+			*tl++ = txdr_unsigned(1);	/* 1 file handle. */
+			*tl++ = txdr_unsigned(NFSX_V4PNFSFH);
+			NFSBCOPY(dsfhp, tl, sizeof(*dsfhp));
+			tl += (NFSM_RNDUP(NFSX_V4PNFSFH) / NFSX_UNSIGNED);
+			dsfhp++;
+			if (nfsrv_flexlinuxhack != 0) {
+				*tl++ = txdr_unsigned(strlen(FLEX_UID0));
+				*tl = 0;		/* 0 pad string. */
+				NFSBCOPY(FLEX_UID0, tl++, strlen(FLEX_UID0));
+				*tl++ = txdr_unsigned(strlen(FLEX_UID0));
+				*tl = 0;		/* 0 pad string. */
+				NFSBCOPY(FLEX_UID0, tl++, strlen(FLEX_UID0));
+			} else {
+				*tl++ = txdr_unsigned(strlen(FLEX_OWNERID));
+				NFSBCOPY(FLEX_OWNERID, tl++, NFSX_UNSIGNED);
+				*tl++ = txdr_unsigned(strlen(FLEX_OWNERID));
+				NFSBCOPY(FLEX_OWNERID, tl++, NFSX_UNSIGNED);
+			}
 		}
 	}
 	*tl++ = txdr_unsigned(0);		/* ff_flags. */
 	*tl = txdr_unsigned(60);		/* Status interval hint. */
-	lyp->lay_layoutlen = NFSX_V4FLEXLAYOUT(mirrorcnt);
+	lyp->lay_layoutlen = NFSX_V4FLEXLAYOUT(mirrorcnt, stripecnt);
 	return (lyp);
 }
 
@@ -7126,7 +7119,7 @@ nfsrv_layoutreturn(struct nfsrv_descript *nd, vnode_t vp,
 		error = nfsvno_getfh(vp, &fh, p);
 		if (error == 0) {
 			error = nfsrv_updatemdsattr(vp, &na, p);
-			if (error != 0)
+			if (error != 0 && error != ESTALE)
 				printf("nfsrv_layoutreturn: updatemdsattr"
 				    " failed=%d\n", error);
 		}
@@ -7534,8 +7527,9 @@ nfsrv_setdsserver(char *dspathp, char *mdspathp, NFSPROC_T *p,
 	struct nfsdevice *ds;
 	struct mount *mp;
 	int error, i;
-	char *dsdirpath;
+	char *cp, *dsdirpath, *endcp;
 	size_t dsdirsize;
+	u_quad_t stripesiz;
 
 	NFSD_DEBUG(4, "setdssrv path=%s\n", dspathp);
 	*dsp = NULL;
@@ -7573,6 +7567,7 @@ nfsrv_setdsserver(char *dspathp, char *mdspathp, NFSPROC_T *p,
 	    M_NFSDSTATE, M_WAITOK | M_ZERO);
 	ds->nfsdev_dvp = nd.ni_vp;
 	ds->nfsdev_nmp = VFSTONFS(nd.ni_vp->v_mount);
+	ds->nfsdev_mdsstripesiz = nfsrv_stripesiz;
 	NFSVOPUNLOCK(nd.ni_vp);
 
 	dsdirsize = strlen(dspathp) + 16;
@@ -7605,6 +7600,9 @@ nfsrv_setdsserver(char *dspathp, char *mdspathp, NFSPROC_T *p,
 	free(dsdirpath, M_TEMP);
 
 	if (strlen(mdspathp) > 0) {
+		cp = strchr(mdspathp, '@');
+		if (cp != NULL)
+			*cp = '\0';
 		/*
 		 * This DS stores file for a specific MDS exported file
 		 * system.
@@ -7632,6 +7630,19 @@ nfsrv_setdsserver(char *dspathp, char *mdspathp, NFSPROC_T *p,
 		ds->nfsdev_mdsfsid = mp->mnt_stat.f_fsid;
 		ds->nfsdev_mdsisset = 1;
 		vput(nd.ni_vp);
+		if (cp != NULL) {
+			/* There is a stripesiz specified. */
+			endcp = NULL;
+			if (*(cp + 1) != '\0')
+				stripesiz = strtouq(cp + 1, &endcp, 10);
+			if (endcp == NULL || *endcp != '\0') {
+				error = ENXIO;
+				NFSD_DEBUG(4, "mds stripesiz invalid\n");
+				goto out;
+			}
+			ds->nfsdev_mdsstripesiz = stripesiz;
+			*cp = '@';
+		}
 	}
 
 out:
@@ -8454,7 +8465,7 @@ nfsrv_mdscopymr(char *mdspathp, char *dspathp, char *curdspathp, char *buf,
 	struct vnode *vp, *curvp;
 	struct pnfsdsfile *pf;
 	struct nfsmount *nmp, *curnmp;
-	int dsdir, error, mirrorcnt, ippos;
+	int dsdir, error, ippos;
 
 	vp = NULL;
 	curvp = NULL;
@@ -8591,7 +8602,7 @@ nfsrv_mdscopymr(char *mdspathp, char *dspathp, char *curdspathp, char *buf,
 	 * on the MDS file (as checked via the nmp argument),
 	 * nfsrv_dsgetsockmnt() returns EEXIST, so no copying will occur.
 	 */
-	error = nfsrv_dsgetsockmnt(vp, 0, buf, buflenp, &mirrorcnt, p,
+	error = nfsrv_dsgetsockmnt(vp, 0, buf, buflenp, NULL, NULL, NULL, p,
 	    NULL, NULL, NULL, fname, nvpp, &nmp, curnmp, &ippos, &dsdir);
 	if (curvp != NULL)
 		vput(curvp);
@@ -8858,4 +8869,76 @@ nfsrv_removedeleg(fhandle_t *fhp, struct nfsrv_descript *nd, NFSPROC_T *p)
 			nfsrv_freedeleg(stp);
 	}
 	NFSUNLOCKSTATE();
+}
+
+/*
+ * Free the nfslockfile structure if not in use.
+ */
+static void
+nfsrv_freelockifnotinuse(struct nfslockfile *lfp)
+{
+
+	/*
+	 * The nfslockfile is freed here if there are no locks
+	 * associated with the open.
+	 * If there are locks associated with the open, the
+	 * nfslockfile structure can be freed via nfsrv_freelockowner().
+	 */
+	if (lfp != NULL && LIST_EMPTY(&lfp->lf_open) &&
+	    LIST_EMPTY(&lfp->lf_deleg) && LIST_EMPTY(&lfp->lf_lock) &&
+	    LIST_EMPTY(&lfp->lf_locallock) && LIST_EMPTY(&lfp->lf_rollback) &&
+	    lfp->lf_usecount == 0 &&
+	    nfsv4_testlock(&lfp->lf_locallock_lck) == 0)
+		nfsrv_freenfslockfile(lfp);
+}
+
+/*
+ * Free stranded open/lock/delegation/layouts.
+ * (These become stranded if the file has been deleted.)
+ */
+void
+nfsrv_freestrandedstate(struct nfsrvfh *nfp)
+{
+	struct nfslockfile *lfp;
+	struct nfsstate *stp, *nstp;
+	struct nfslayouthash *lhyp;
+	struct nfslayout *lyp, *nlyp;
+	fhandle_t *fhp;
+
+	if (nfp->nfsrvfh_len != NFSX_MYFH)
+		return;
+	fhp = (fhandle_t *)nfp->nfsrvfh_data;
+	NFSLOCKSTATE();
+	if (nfsrv_getlockfile(0, NULL, &lfp, fhp, 0) < 0) {
+		NFSUNLOCKSTATE();
+		return;
+	}
+	lfp->lf_usecount++;	/* So nfsrv_freeopen() does not free it. */
+	/* Note that nfsrv_freeopen() will also free the byte range locks. */
+	LIST_FOREACH_SAFE(stp, &lfp->lf_open, ls_file, nstp)
+		nfsrv_freeopen(stp, NULL, 0, curthread);
+
+	/*
+	 * Normally, a delegation will have been recalled when the file is
+	 * removed.  However, get rid of any that have somehow been
+	 * left stranded.
+	 */
+	LIST_FOREACH_SAFE(stp, &lfp->lf_deleg, ls_file, nstp)
+		nfsrv_freedeleg(stp);
+
+	/* Get rid of the nfslockfile, if no longer in use. */
+	lfp->lf_usecount--;
+	nfsrv_freelockifnotinuse(lfp);
+	NFSUNLOCKSTATE();
+
+	/* Free any layouts for the pNFS server case. */
+	if (nfsrv_devidcnt == 0)
+		return;
+	lhyp = NFSLAYOUTHASH(fhp);
+	NFSLOCKLAYOUT(lhyp);
+	TAILQ_FOREACH_SAFE(lyp, &lhyp->list, lay_list, nlyp) {
+		if (NFSBCMP(&lyp->lay_fh, fhp, sizeof(*fhp)) == 0)
+			nfsrv_freelayout(&lhyp->list, lyp);
+	}
+	NFSUNLOCKLAYOUT(lhyp);
 }

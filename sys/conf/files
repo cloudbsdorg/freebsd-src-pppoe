@@ -346,6 +346,8 @@ contrib/openzfs/module/zfs/vdev_removal.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/vdev_root.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/vdev_trim.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zap.c		optional zfs compile-with "${ZFS_C}"
+contrib/openzfs/module/zfs/zap_fat.c		optional zfs compile-with "${ZFS_C}"
+contrib/openzfs/module/zfs/zap_impl.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zap_leaf.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zap_micro.c		optional zfs compile-with "${ZFS_C}"
 contrib/openzfs/module/zfs/zcp.c		optional zfs compile-with "${ZFS_C}"
@@ -757,6 +759,7 @@ dev/acpica/Osd/OsdTable.c	optional acpi
 dev/acpica/acpi.c		optional acpi
 dev/acpica/acpi_acad.c		optional acpi
 dev/acpica/acpi_apei.c		optional acpi
+dev/acpica/acpi_apei_bus.c	optional acpi
 dev/acpica/acpi_battery.c	optional acpi
 dev/acpica/acpi_button.c	optional acpi
 dev/acpica/acpi_cmbat.c		optional acpi
@@ -777,6 +780,7 @@ dev/acpica/acpi_throttle.c	optional acpi
 dev/acpica/acpi_video.c		optional acpi_video acpi
 dev/acpica/acpi_dock.c		optional acpi_dock acpi
 dev/acpica/acpi_spmc.c		optional acpi
+dev/acpica/apei_if.m		optional acpi
 dev/adlink/adlink.c		optional adlink
 dev/ae/if_ae.c			optional ae pci
 dev/age/if_age.c		optional age pci
@@ -854,6 +858,7 @@ dev/aq/aq_hw_llh.c		optional aq
 dev/aq/aq_fw.c			optional aq
 dev/aq/aq_fw1x.c		optional aq
 dev/aq/aq_fw2x.c		optional aq
+dev/aq/aq2_fw.c		optional aq
 dev/aq/aq_dbg.c			optional aq
 #
 dev/ata/ata_if.m		optional ata | atacore
@@ -1324,6 +1329,9 @@ dev/bnxt/bnxt_en/bnxt_sriov.c		optional bnxt iflib pci compile-with "${BNXT_C}"
 dev/bnxt/bnxt_en/bnxt_sysctl.c		optional bnxt iflib pci compile-with "${BNXT_C}"
 dev/bnxt/bnxt_en/bnxt_txrx.c		optional bnxt iflib pci compile-with "${BNXT_C}"
 dev/bnxt/bnxt_en/bnxt_ulp.c		optional bnxt iflib pci compile-with "${BNXT_C}"
+dev/bnxt/bnxt_en/bnxt_log.c		optional bnxt iflib pci compile-with "${BNXT_C}"
+dev/bnxt/bnxt_en/bnxt_log_data.c	optional bnxt iflib pci compile-with "${BNXT_C}"
+dev/bnxt/bnxt_en/bnxt_coredump.c	optional bnxt iflib pci compile-with "${BNXT_C}"
 dev/bnxt/bnxt_en/if_bnxt.c		optional bnxt iflib pci compile-with "${BNXT_C}"
 dev/bwi/bwimac.c		optional bwi
 dev/bwi/bwiphy.c		optional bwi
@@ -1350,6 +1358,10 @@ dev/cfi/cfi_core.c		optional cfi
 dev/cfi/cfi_dev.c		optional cfi
 dev/cfi/cfi_disk.c		optional cfid
 dev/chromebook_platform/chromebook_platform.c	optional chromebook_platform
+dev/coreboot/coreboot.c			optional coreboot
+dev/coreboot/coreboot_cbmem.c		optional coreboot
+dev/coreboot/coreboot_console.c		optional coreboot
+dev/coreboot/coreboot_timestamps.c	optional coreboot
 dev/ciss/ciss.c			optional ciss
 dev/clk/clk.c			optional clk
 dev/clk/clkdev_if.m		optional clk
@@ -1626,6 +1638,10 @@ dev/efidev/efirt.c		optional efirt
 dev/efidev/efirtc.c		optional efirt efirtc
 dev/e1000/if_em.c		optional em \
 	compile-with "${NORMAL_C} -I$S/dev/e1000"
+dev/e1000/if_igbv.c		optional em \
+	compile-with "${NORMAL_C} -I$S/dev/e1000"
+dev/e1000/if_igb_iov.c		optional em \
+	compile-with "${NORMAL_C} -I$S/dev/e1000"
 dev/e1000/em_txrx.c		optional em \
 	compile-with "${NORMAL_C} -I$S/dev/e1000"
 dev/e1000/igb_txrx.c		optional em \
@@ -1724,7 +1740,11 @@ dev/filemon/filemon.c		optional filemon
 dev/firewire/firewire.c		optional firewire
 dev/firewire/fwcrom.c		optional firewire
 dev/firewire/fwdev.c		optional firewire
+dev/firewire/fwcam.c		optional fwcam video
 dev/firewire/fwdma.c		optional firewire
+dev/firewire/fwdv.c		optional fwdv
+dev/firewire/fwisound.c		optional fwisound sound
+dev/firewire/fwisound_pcm.c	optional fwisound sound
 dev/firewire/fwmem.c		optional firewire
 dev/firewire/fwohci.c		optional firewire
 dev/firewire/fwohci_pci.c	optional firewire pci
@@ -1787,10 +1807,12 @@ dev/hid/hidbus.c		optional hidbus
 dev/hid/hidmap.c		optional hidmap | hms
 dev/hid/hidquirk.c		optional hid
 dev/hid/hidraw.c		optional hidraw
+dev/hid/hidwacom.c		optional hidwacom
 dev/hid/hkbd.c			optional hkbd
 dev/hid/hms.c			optional hms
 dev/hid/hmt.c			optional hmt hconf
 dev/hid/hpen.c			optional hpen
+dev/hid/hrfkill.c		optional hrfkill
 dev/hid/hsctrl.c		optional hsctrl
 dev/hid/ietp.c			optional ietp
 dev/hid/ps4dshock.c		optional ps4dshock
@@ -1866,6 +1888,7 @@ dev/iicbus/rtc/s35390a.c	optional s35390a
 dev/iicbus/sensor/htu21.c	optional htu21
 dev/iicbus/sensor/lm75.c	optional lm75
 dev/iicbus/sensor/max44009.c	optional max44009
+dev/iicbus/sensor/w83793g.c	optional w83793g
 dev/iicbus/gpio/pcf8574.c	optional pcf8574
 dev/iicbus/gpio/tca64xx.c	optional tca64xx fdt gpio
 dev/iicbus/pmic/fan53555.c	optional fan53555 fdt | tcs4525 fdt
@@ -3491,9 +3514,12 @@ dev/usb/template/usb_template_cdceem.c	optional usb_template
 # USB video drivers
 #
 dev/usb/video/udl.c			optional udl
+dev/usb/video/uvideo.c			optional uvideo video
 #
 # USB END
 #
+dev/video/video.c			optional video
+dev/video/video_if.m			optional video
 dev/videomode/videomode.c		optional videomode
 dev/videomode/edid.c			optional videomode
 dev/videomode/pickmode.c		optional videomode
@@ -3964,6 +3990,7 @@ kern/subr_disk.c		standard
 kern/subr_early.c		standard
 kern/subr_epoch.c		standard
 kern/subr_eventhandler.c	standard
+kern/subr_exterr.c		standard
 kern/subr_fattime.c		standard
 kern/subr_firmware.c		optional firmware
 kern/subr_filter.c		standard
@@ -4664,6 +4691,8 @@ compat/linuxkpi/common/src/linux_80211.c	optional compat_linuxkpi wlan \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_80211_macops.c	optional compat_linuxkpi wlan \
 	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linuxkpi_80211_pm.c	optional compat_linuxkpi wlan \
+	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_kmod.c		optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_acpi.c		optional compat_linuxkpi acpi \
@@ -4705,6 +4734,8 @@ compat/linuxkpi/common/src/linux_mhi.c		optional compat_linuxkpi wlan \
 compat/linuxkpi/common/src/linux_netdev.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_page.c		optional compat_linuxkpi \
+	compile-with "${LINUXKPI_C}"
+compat/linuxkpi/common/src/linuxkpi_page_pool.c	optional compat_linuxkpi \
 	compile-with "${LINUXKPI_C}"
 compat/linuxkpi/common/src/linux_pci.c		optional compat_linuxkpi pci \
 	compile-with "${LINUXKPI_C}"

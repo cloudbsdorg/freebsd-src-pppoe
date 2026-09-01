@@ -101,7 +101,7 @@
 #if defined(COMPAT_FREEBSD4) || defined(COMPAT_FREEBSD5) || \
     defined(COMPAT_FREEBSD6) || defined(COMPAT_FREEBSD7) || \
     defined(COMPAT_FREEBSD9)
-#error FreeBSD/arm doesn't provide compatibility with releases prior to 10
+#error "FreeBSD/arm doesn't provide compatibility with releases prior to 10"
 #endif
 
 
@@ -378,8 +378,7 @@ init_proc0(void *kstack)
 	proc_linkup0(&proc0, &thread0);
 	thread0.td_kstack = kstack;
 	thread0.td_kstack_pages = kstack_pages;
-	thread0.td_pcb = (struct pcb *)(thread0.td_kstack +
-	    thread0.td_kstack_pages * PAGE_SIZE) - 1;
+	thread0.td_pcb = (struct pcb *)td_kstack_top(&thread0) - 1;
 	thread0.td_pcb->pcb_flags = 0;
 	thread0.td_pcb->pcb_fpflags = 0;
 	thread0.td_pcb->pcb_vfpcpu = -1;

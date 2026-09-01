@@ -1,23 +1,13 @@
 // SPDX-License-Identifier: CDDL-1.0
 /*
- * CDDL HEADER START
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
  *
- * The contents of this file are subject to the terms of the
- * Common Development and Distribution License (the "License").
- * You may not use this file except in compliance with the License.
- *
- * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
- * or https://opensource.org/licenses/CDDL-1.0.
- * See the License for the specific language governing permissions
- * and limitations under the License.
- *
- * When distributing Covered Code, include this CDDL HEADER in each
- * file and include the License file at usr/src/OPENSOLARIS.LICENSE.
- * If applicable, add the following below this CDDL HEADER, with the
- * fields enclosed by brackets "[]" replaced with your own identifying
- * information: Portions Copyright [yyyy] [name of copyright owner]
- *
- * CDDL HEADER END
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * https://opensource.org/license/CDDL-1.0.
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
@@ -832,6 +822,8 @@ typedef struct arc_stats {
 	 * due to ARC_FLAG_UNCACHED being set.
 	 */
 	kstat_named_t arcstat_uncached_evictable_metadata;
+	/* Number of L2ARC devices currently attached across all pools. */
+	kstat_named_t arcstat_l2_ndev;
 	kstat_named_t arcstat_l2_hits;
 	kstat_named_t arcstat_l2_misses;
 	/*
@@ -1103,7 +1095,7 @@ extern arc_sums_t arc_sums;
 extern hrtime_t arc_growtime;
 extern boolean_t arc_warm;
 extern uint_t arc_grow_retry;
-extern uint_t arc_no_grow_shift;
+extern uint_t zfs_arc_no_grow_shift;
 extern uint_t arc_shrink_shift;
 extern kmutex_t arc_prune_mtx;
 extern list_t arc_prune_list;
@@ -1134,6 +1126,7 @@ extern int param_set_arc_int(ZFS_MODULE_PARAM_ARGS);
 extern int param_set_arc_min(ZFS_MODULE_PARAM_ARGS);
 extern int param_set_arc_max(ZFS_MODULE_PARAM_ARGS);
 extern int param_set_l2arc_dwpd_limit(ZFS_MODULE_PARAM_ARGS);
+extern int param_set_arc_no_grow_shift(ZFS_MODULE_PARAM_ARGS);
 extern void l2arc_dwpd_bump_reset(void);
 
 /* used in zdb.c */

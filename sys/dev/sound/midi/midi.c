@@ -143,7 +143,7 @@ midi_init(kobj_class_t cls, void *cookie)
 
 	mtx_unlock(&m->lock);
 
-	m->dev = make_dev(&midi_cdevsw, m->unit, UID_ROOT, GID_WHEEL, 0666,
+	m->dev = make_dev(&midi_cdevsw, m->unit, UID_ROOT, GID_AUDIO, 0660,
 	    "midi%d.%d", m->unit, m->channel);
 	m->dev->si_drv1 = m;
 
@@ -483,7 +483,7 @@ err0:	return retval;
 }
 
 int
-midi_ioctl(struct cdev *i_dev, u_long cmd, caddr_t arg, int mode,
+midi_ioctl(struct cdev *i_dev, unsigned long cmd, caddr_t arg, int mode,
     struct thread *td)
 {
 	return ENXIO;

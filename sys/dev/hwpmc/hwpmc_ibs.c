@@ -60,9 +60,15 @@ struct ibs_descr {
 static uint64_t ibs_features;
 static uint64_t ibs_fetch_allowed_mask;
 static uint64_t ibs_op_allowed_mask;
+static uint64_t ibs_fetch_ctl2_allowed_mask;
+static uint64_t ibs_op_ctl2_allowed_mask;
+static bool ibs_fetch_ctl2_supported;
+static bool ibs_op_ctl2_supported;
 
 static uint64_t ibs_fetch_extra_mask;
+static uint64_t ibs_fetch_ctl2_extra_mask;
 static uint64_t ibs_op_extra_mask;
+static uint64_t ibs_op_ctl2_extra_mask;
 
 SYSCTL_DECL(_kern_hwpmc);
 
@@ -70,9 +76,17 @@ SYSCTL_U64(_kern_hwpmc, OID_AUTO, ibs_fetch_extra_mask, CTLFLAG_RDTUN,
     &ibs_fetch_extra_mask, 0,
     "Extra allowed bits in the IBS fetch control MSR (override; default 0)");
 
+SYSCTL_U64(_kern_hwpmc, OID_AUTO, ibs_fetch_ctl2_extra_mask, CTLFLAG_RDTUN,
+    &ibs_fetch_ctl2_extra_mask, 0,
+    "Extra allowed bits in the IBS fetch control 2 MSR (override; default 0)");
+
 SYSCTL_U64(_kern_hwpmc, OID_AUTO, ibs_op_extra_mask, CTLFLAG_RDTUN,
     &ibs_op_extra_mask, 0,
     "Extra allowed bits in the IBS op control MSR (override; default 0)");
+
+SYSCTL_U64(_kern_hwpmc, OID_AUTO, ibs_op_ctl2_extra_mask, CTLFLAG_RDTUN,
+    &ibs_op_ctl2_extra_mask, 0,
+    "Extra allowed bits in the IBS op control 2 MSR (override; default 0)");
 
 /*
  * Per-processor information
@@ -92,8 +106,10 @@ ibs_init_policy(void)
 {
 
 	ibs_fetch_allowed_mask = IBS_FETCH_ALLOWED_MASK_BASE;
+	ibs_fetch_ctl2_allowed_mask = 0;
 
 	ibs_op_allowed_mask = IBS_OP_CTL_MAXCNTBASEMASK;
+	ibs_op_ctl2_allowed_mask = 0;
 
 	if ((ibs_features & CPUID_IBSID_ZEN4IBSEXTENSIONS) != 0)
 		ibs_fetch_allowed_mask |= IBS_FETCH_CTL_L3MISSONLY;
@@ -106,14 +122,39 @@ ibs_init_policy(void)
 
 	if ((ibs_features & CPUID_IBSID_ZEN4IBSEXTENSIONS) != 0)
 		ibs_op_allowed_mask |= IBS_OP_CTL_L3MISSONLY;
+
+	if ((ibs_features & CPUID_IBSID_FETCHLATFILTERING) != 0)
+		ibs_fetch_ctl2_allowed_mask |= IBS_FETCH_CTL2_LATFILTERMASK;
+
+	if ((ibs_features & CPUID_IBSID_STRMSTANDRMTSOCKET) != 0)
+		ibs_op_ctl2_allowed_mask |= IBS_OP_CTL2_STRMSTFILTER;
+
+	if ((ibs_features & CPUID_IBSID_IBSDIS) != 0) {
+		ibs_fetch_ctl2_supported = true;
+		ibs_op_ctl2_supported = true;
+	}
+
+	/*
+	 * ctl2 MSRs only exist on Zen 6; writing them on older silicon
+	 * would #GP.
+	 */
+	if (!ibs_fetch_ctl2_supported)
+		ibs_fetch_ctl2_supported = (ibs_fetch_ctl2_allowed_mask != 0);
+	if (!ibs_op_ctl2_supported)
+		ibs_op_ctl2_supported = (ibs_op_ctl2_allowed_mask != 0);
 }
 
 static int
 ibs_validate_fetch_config(uint64_t config)
 {
+	uint64_t allowed_mask;
 
-	if ((config & ~(ibs_fetch_allowed_mask | ibs_fetch_extra_mask)) != 0)
-		return (EINVAL);
+	allowed_mask = ibs_fetch_allowed_mask | ibs_fetch_extra_mask;
+	if ((config & ~allowed_mask) != 0) {
+		return (EXTERROR(EINVAL,
+		    "IBS fetch ctl config 0x%jx has bits outside allowed mask"
+		    " 0x%jx", (uintmax_t)config, (uintmax_t)allowed_mask));
+	}
 
 	return (0);
 }
@@ -127,32 +168,96 @@ ibs_validate_op_config(uint64_t config)
 
 	if ((config & IBS_OP_CTL_LATFLTEN) != 0) {
 		if ((ibs_features & CPUID_IBSID_IBSLOADLATENCYFILT) == 0)
-			return (EINVAL);
-		if ((config & IBS_OP_CTL_L3MISSONLY) == 0)
-			return (EINVAL);
+			return (EXTERROR(EINVAL,
+			    "IBS op load-latency filter is not supported"));
+		/*
+		 * Zen 6 decouples L3MISSONLY from load-latency filtering
+		 * (AMD pub 69205); enforce the pairing only on older parts.
+		 */
+		if ((ibs_features & CPUID_IBSID_IBSDIS) == 0 &&
+		    (config & IBS_OP_CTL_L3MISSONLY) == 0)
+			return (EXTERROR(EINVAL,
+			    "IBS op load-latency filter requires l3miss"));
 
 		allowed_mask |= IBS_OP_CTL_LDLATMASK | IBS_OP_CTL_L3MISSONLY;
 	}
 
 	allowed_mask |= ibs_op_extra_mask;
 
-	if ((config & ~allowed_mask) != 0)
-		return (EINVAL);
+	if ((config & ~allowed_mask) != 0) {
+		return (EXTERROR(EINVAL,
+		    "IBS op ctl config 0x%jx has bits outside allowed mask"
+		    " 0x%jx", (uintmax_t)config, (uintmax_t)allowed_mask));
+	}
 
 	return (0);
 }
 
 static int
-ibs_validate_pmc_config(int ri, uint64_t config)
+ibs_validate_fetch_ctl2_config(uint64_t config)
 {
+	uint64_t allowed_mask;
+
+	if (config == 0)
+		return (0);
+
+	if (!ibs_fetch_ctl2_supported)
+		return (EXTERROR(EINVAL,
+		    "IBS fetch ctl2 features are not supported on this CPU"));
+
+	allowed_mask = ibs_fetch_ctl2_allowed_mask | ibs_fetch_ctl2_extra_mask;
+
+	if ((config & ~allowed_mask) != 0) {
+		return (EXTERROR(EINVAL,
+		    "IBS fetch ctl2 config 0x%jx has bits outside allowed"
+		    " mask 0x%jx", (uintmax_t)config, (uintmax_t)allowed_mask));
+	}
+
+	return (0);
+}
+
+static int
+ibs_validate_op_ctl2_config(uint64_t config)
+{
+	uint64_t allowed_mask;
+
+	if (config == 0)
+		return (0);
+
+	if (!ibs_op_ctl2_supported)
+		return (EXTERROR(EINVAL,
+		    "IBS op ctl2 features are not supported on this CPU"));
+
+	allowed_mask = ibs_op_ctl2_allowed_mask | ibs_op_ctl2_extra_mask;
+
+	if ((config & ~allowed_mask) != 0) {
+		return (EXTERROR(EINVAL,
+		    "IBS op ctl2 config 0x%jx has bits outside allowed mask"
+		    " 0x%jx", (uintmax_t)config, (uintmax_t)allowed_mask));
+	}
+
+	return (0);
+}
+
+static int
+ibs_validate_pmc_config(int ri, uint64_t config, uint64_t config2)
+{
+	int error;
 
 	switch (ri) {
 	case IBS_PMC_FETCH:
-		return (ibs_validate_fetch_config(config));
+		error = ibs_validate_fetch_config(config);
+		if (error != 0)
+			return (error);
+		return (ibs_validate_fetch_ctl2_config(config2));
 	case IBS_PMC_OP:
-		return (ibs_validate_op_config(config));
+		error = ibs_validate_op_config(config);
+		if (error != 0)
+			return (error);
+		return (ibs_validate_op_ctl2_config(config2));
 	default:
-		return (EINVAL);
+		return (EXTERROR(EINVAL, "Unsupported IBS PMC type %ju",
+		    (uintmax_t)ri));
 	}
 }
 
@@ -266,38 +371,69 @@ static int
 ibs_allocate_pmc(int cpu __unused, int ri, struct pmc *pm,
     const struct pmc_op_pmcallocate *a)
 {
-	uint64_t caps, config;
+	uint64_t caps, config, config2;
 	int error;
 
 	KASSERT(ri >= 0 && ri < IBS_NPMCS,
 	    ("[ibs,%d] illegal row index %d", __LINE__, ri));
 
-	/* check class match */
+	/* Row discriminators; the allocation loop probes every row. */
 	if (a->pm_class != PMC_CLASS_IBS)
-		return (EXTERROR(EINVAL, "PMC class is not IBS"));
+		return (EINVAL);
 	if (a->pm_md.pm_ibs.ibs_type != ri)
-		return (EXTERROR(EINVAL,
-		    "IBS type %ju does not match PMC index %ju",
-		    (uint64_t)a->pm_md.pm_ibs.ibs_type, (uint64_t)ri));
+		return (EINVAL);
 
 	caps = pm->pm_caps;
 
 	PMCDBG2(MDP, ALL, 1, "ibs-allocate ri=%d caps=0x%x", ri, caps);
 
-	if ((caps & PMC_CAP_SYSTEM) == 0)
-		return (EXTERROR(EINVAL, "IBS requires SYSTEM capability"));
+	if ((ibs_features & CPUID_IBSID_ADDRBIT63FILTERING) != 0) {
+		if ((caps & (PMC_CAP_USER | PMC_CAP_SYSTEM)) == 0)
+			return (EXTERROR(EINVAL,
+			    "IBS requires at least USER or SYSTEM capability"));
+	} else {
+		if ((caps & PMC_CAP_SYSTEM) == 0)
+			return (EXTERROR(EINVAL,
+			    "IBS requires SYSTEM capability"));
+		if ((caps & PMC_CAP_USER) != 0)
+			return (EXTERROR(EINVAL,
+			    "IBS USER filtering requires Zen 6 addr63 support"));
+	}
 
 	if (!PMC_IS_SAMPLING_MODE(a->pm_mode))
-		return (EINVAL);
+		return (EXTERROR(EINVAL, "IBS only supports sampling mode"));
 
 	config = a->pm_md.pm_ibs.ibs_ctl;
-	error = ibs_validate_pmc_config(ri, config);
+	config2 = a->pm_md.pm_ibs.ibs_ctl2;
+	error = ibs_validate_pmc_config(ri, config, config2);
 	if (error != 0)
 		return (error);
 	pm->pm_md.pm_ibs.ibs_ctl = config;
+	pm->pm_md.pm_ibs.ibs_ctl2 = config2;
 
-	PMCDBG2(MDP, ALL, 2, "ibs-allocate ri=%d -> config=0x%jx", ri,
-	    config);
+	if ((ibs_features & CPUID_IBSID_ADDRBIT63FILTERING) != 0) {
+		if ((caps & PMC_CAP_USER) != 0 &&
+		    (caps & PMC_CAP_SYSTEM) == 0) {
+			if (ri == IBS_PMC_FETCH)
+				pm->pm_md.pm_ibs.ibs_ctl2 |=
+				    IBS_FETCH_CTL2_EXCLADDR63EQ1;
+			else
+				pm->pm_md.pm_ibs.ibs_ctl2 |=
+				    IBS_OP_CTL2_EXCLRIP63EQ1;
+		} else if ((caps & PMC_CAP_SYSTEM) != 0 &&
+		    (caps & PMC_CAP_USER) == 0) {
+			if (ri == IBS_PMC_FETCH)
+				pm->pm_md.pm_ibs.ibs_ctl2 |=
+				    IBS_FETCH_CTL2_EXCLADDR63EQ0;
+			else
+				pm->pm_md.pm_ibs.ibs_ctl2 |=
+				    IBS_OP_CTL2_EXCLRIP63EQ0;
+		}
+	}
+
+	PMCDBG3(MDP, ALL, 2,
+	    "ibs-allocate ri=%d -> config=0x%jx config2=0x%jx", ri,
+	    config, config2);
 
 	return (0);
 }
@@ -349,16 +485,24 @@ ibs_start_pmc(int cpu __diagused, int ri, struct pmc *pm)
 
 	/*
 	 * Turn on the ENABLE bit.  Zeroing out the control register eliminates
-	 * stale valid bits from spurious NMIs and it resets the counter.
+	 * stale valid bits from spurious NMIs and it resets the counter.  This
+	 * is safe here because the counter is not yet enabled; the NMI re-arm
+	 * path must not do the same (Family 10h erratum #420).
 	 */
 	switch (ri) {
 	case IBS_PMC_FETCH:
 		wrmsr(IBS_FETCH_CTL, 0);
+		if (ibs_fetch_ctl2_supported)
+			wrmsr(IBS_FETCH_CTL2,
+			    pm->pm_md.pm_ibs.ibs_ctl2 & ~IBS_FETCH_CTL2_DISABLE);
 		config = pm->pm_md.pm_ibs.ibs_ctl | IBS_FETCH_CTL_ENABLE;
 		wrmsr(IBS_FETCH_CTL, config);
 		break;
 	case IBS_PMC_OP:
 		wrmsr(IBS_OP_CTL, 0);
+		if (ibs_op_ctl2_supported)
+			wrmsr(IBS_OP_CTL2,
+			    pm->pm_md.pm_ibs.ibs_ctl2 & ~IBS_OP_CTL2_DISABLE);
 		config = pm->pm_md.pm_ibs.ibs_ctl | IBS_OP_CTL_ENABLE;
 		wrmsr(IBS_OP_CTL, config);
 		break;
@@ -374,7 +518,8 @@ static int
 ibs_stop_pmc(int cpu __diagused, int ri, struct pmc *pm)
 {
 	int i;
-	uint64_t config;
+	uint64_t config, config2;
+	bool use_alt_disable;
 
 	KASSERT(cpu >= 0 && cpu < pmc_cpu_max(),
 	    ("[ibs,%d] illegal CPU value %d", __LINE__, cpu));
@@ -394,23 +539,47 @@ ibs_stop_pmc(int cpu __diagused, int ri, struct pmc *pm)
 	 * are stopping and discard spurious NMIs.  We then retry clearing the
 	 * control register for 50us.  This gives us enough time and ensures
 	 * that the valid bit is not accidently stuck after a spurious NMI.
+	 *
+	 * On Zen 6 with the alternate disable bit (CPUID IbsDis), assert the
+	 * ctl2 DISABLE bit first.  This avoids an RMW hazard in ctl1 that the
+	 * processor may update concurrently while sampling.
 	 */
 	config = pm->pm_md.pm_ibs.ibs_ctl;
+	config2 = pm->pm_md.pm_ibs.ibs_ctl2;
+	use_alt_disable = (ibs_features & CPUID_IBSID_IBSDIS) != 0;
 
 	atomic_store_int(&ibs_pcpu[cpu]->pc_status, IBS_CPU_STOPPING);
 
+	/*
+	 * On Zen 6, ctl2 DISABLE is the authoritative stop switch; skip
+	 * the legacy ctl1 RMW and clear it directly
+	 */
 	switch (ri) {
 	case IBS_PMC_FETCH:
-		wrmsr(IBS_FETCH_CTL, config & ~IBS_FETCH_CTL_MAXCNTMASK);
-		DELAY(1);
-		config &= ~IBS_FETCH_CTL_ENABLE;
-		wrmsr(IBS_FETCH_CTL, config);
+		if (use_alt_disable) {
+			wrmsr(IBS_FETCH_CTL2,
+			    config2 | IBS_FETCH_CTL2_DISABLE);
+			wrmsr(IBS_FETCH_CTL, config & ~IBS_FETCH_CTL_ENABLE);
+		} else {
+			wrmsr(IBS_FETCH_CTL,
+			    config & ~IBS_FETCH_CTL_MAXCNTMASK);
+			DELAY(1);
+			config &= ~IBS_FETCH_CTL_ENABLE;
+			wrmsr(IBS_FETCH_CTL, config);
+		}
 		break;
 	case IBS_PMC_OP:
-		wrmsr(IBS_OP_CTL, config & ~IBS_OP_CTL_MAXCNTMASK);
-		DELAY(1);
-		config &= ~IBS_OP_CTL_ENABLE;
-		wrmsr(IBS_OP_CTL, config);
+		if (use_alt_disable) {
+			wrmsr(IBS_OP_CTL2,
+			    config2 | IBS_OP_CTL2_DISABLE);
+			wrmsr(IBS_OP_CTL, config & ~IBS_OP_CTL_ENABLE);
+		} else {
+			wrmsr(IBS_OP_CTL,
+			    config & ~IBS_OP_CTL_MAXCNTMASK);
+			DELAY(1);
+			config &= ~IBS_OP_CTL_ENABLE;
+			wrmsr(IBS_OP_CTL, config);
+		}
 		break;
 	}
 
@@ -420,9 +589,13 @@ ibs_stop_pmc(int cpu __diagused, int ri, struct pmc *pm)
 		switch (ri) {
 		case IBS_PMC_FETCH:
 			wrmsr(IBS_FETCH_CTL, 0);
+			if (ibs_fetch_ctl2_supported)
+				wrmsr(IBS_FETCH_CTL2, 0);
 			break;
 		case IBS_PMC_OP:
 			wrmsr(IBS_OP_CTL, 0);
+			if (ibs_op_ctl2_supported)
+				wrmsr(IBS_OP_CTL2, 0);
 			break;
 		}
 	}
@@ -455,6 +628,9 @@ pmc_ibs_process_fetch(struct pmc *pm, struct trapframe *tf, uint64_t config)
 	if ((config & IBS_FETCH_CTL_PHYSADDRVALID) != 0) {
 		mpd.pl_mpdata[PMC_MPIDX_FETCH_PHYSADDR] =
 		    rdmsr(IBS_FETCH_PHYSADDR);
+	}
+	if (ibs_fetch_ctl2_supported) {
+		mpd.pl_mpdata[PMC_MPIDX_FETCH_CTL2] = rdmsr(IBS_FETCH_CTL2);
 	}
 
 	pmc_process_interrupt_mp(PMC_HR, pm, tf, &mpd);
@@ -490,6 +666,9 @@ pmc_ibs_process_op(struct pmc *pm, struct trapframe *tf, uint64_t config)
 	if ((ibs_features & CPUID_IBSID_IBSOPDATA4) != 0) {
 		mpd.pl_mpdata[PMC_MPIDX_OP_DATA4] = rdmsr(IBS_OP_DATA4);
 	}
+	if (ibs_op_ctl2_supported) {
+		mpd.pl_mpdata[PMC_MPIDX_OP_CTL2] = rdmsr(IBS_OP_CTL2);
+	}
 
 	pmc_process_interrupt_mp(PMC_HR, pm, tf, &mpd);
 
@@ -509,6 +688,9 @@ pmc_ibs_intr(struct trapframe *tf)
 	struct pmc *pm;
 	int retval, cpu;
 	uint64_t config;
+
+	if (ibs_pcpu == NULL)
+		return (0);
 
 	cpu = curcpu;
 	KASSERT(cpu >= 0 && cpu < pmc_cpu_max(),
@@ -644,6 +826,10 @@ ibs_pcpu_fini(struct pmc_mdep *md, int cpu)
 	 */
 	wrmsr(IBS_FETCH_CTL, 0);
 	wrmsr(IBS_OP_CTL, 0);
+	if (ibs_fetch_ctl2_supported)
+		wrmsr(IBS_FETCH_CTL2, 0);
+	if (ibs_op_ctl2_supported)
+		wrmsr(IBS_OP_CTL2, 0);
 
 	/*
 	 * Free up allocated space.

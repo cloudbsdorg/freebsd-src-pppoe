@@ -128,8 +128,7 @@ virtdone:
 
 	/* Set up the stack */
 	adrp	x25, initstack_end
-	add	x25, x25, :lo12:initstack_end
-	sub	sp, x25, #PCB_SIZE
+	add	sp, x25, :lo12:initstack_end
 
 	/* Zero the BSS */
 	ldr	x15, .Lbss
@@ -157,7 +156,7 @@ virtdone:
 	add	x25, x25, :lo12:initstack
 	str	x25, [x0, #BP_KERN_STACK]
 	str	x27, [x0, #BP_KERN_TTBR0]
-	str	x23, [x0, #BP_BOOT_EL]
+	str	w23, [x0, #BP_BOOT_EL]
 
 	/* Set these before they are used in kasan_init_early */
 	adrp	x1, pmap_sh_attr

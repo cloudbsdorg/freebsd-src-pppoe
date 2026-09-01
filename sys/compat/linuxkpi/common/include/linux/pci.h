@@ -399,8 +399,7 @@ int _lkpi_pci_enable_msi_range(struct pci_dev *pdev, int minvec, int maxvec);
 static inline bool
 dev_is_pci(struct device *dev)
 {
-
-	return (device_get_devclass(dev->bsddev) == devclass_find("pci"));
+	return (is_pci_device(dev->bsddev));
 }
 
 static inline uint16_t
@@ -556,8 +555,7 @@ pci_upstream_bridge(struct pci_dev *pdev)
 		bridge = device_get_parent(bridge);
 		if (bridge == NULL)
 			goto done;
-		if (device_get_devclass(device_get_parent(bridge)) !=
-		    devclass_find("pci"))
+		if (!is_pci_device(bridge))
 			goto done;
 
 		/*
@@ -660,26 +658,10 @@ pci_find_ext_capability(struct pci_dev *pdev, int capid)
 	return (reg);
 }
 
-#define	PCIM_PCAP_PME_SHIFT	11
 static __inline bool
-pci_pme_capable(struct pci_dev *pdev, uint32_t flag)
+pci_pme_capable(struct pci_dev *pdev, pci_power_t state)
 {
-	struct pci_devinfo *dinfo;
-	pcicfgregs *cfg;
-
-	if (flag > (PCIM_PCAP_D3PME_COLD >> PCIM_PCAP_PME_SHIFT))
-		return (false);
-
-	dinfo = device_get_ivars(pdev->dev.bsddev);
-	cfg = &dinfo->cfg;
-
-	if (cfg->pp.pp_cap == 0)
-		return (false);
-
-	if ((cfg->pp.pp_cap & (1 << (PCIM_PCAP_PME_SHIFT + flag))) != 0)
-		return (true);
-
-	return (false);
+	return (pci_has_pme(pdev->dev.bsddev, state));
 }
 
 static inline int

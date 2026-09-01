@@ -768,7 +768,8 @@ struct uio;
  */
 #define	MBF_NOWAIT	0x01
 #define	MBF_MNTLSTLOCK	0x02
-#define	MBF_MASK	(MBF_NOWAIT | MBF_MNTLSTLOCK)
+#define	MBF_PCATCH	0x04
+#define	MBF_MASK	(MBF_NOWAIT | MBF_MNTLSTLOCK | MBF_PCATCH)
 
 #ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_MOUNT);
@@ -967,18 +968,18 @@ VFS_PURGE(struct mount *mp)
 static inline void
 VFS_KNOTE_LOCKED(struct vnode *vp, int hint)
 {
-	if ((vn_irflag_read(vp) & VIRF_KNOTE) != 0) {
-		KNOTE_LOCKED(&vp->v_pollinfo->vpi_selinfo.si_note,
-		    hint);
+	if ((vp->v_v2flag & V2_KNOTE) != 0) {
+		KNOTE(&vp->v_pollinfo->vpi_selinfo.si_note,
+		    hint, KNF_LISTLOCKED | KNF_NOKQLOCK);
 	}
 }
 
 static inline void
 VFS_KNOTE_UNLOCKED(struct vnode *vp, int hint)
 {
-	if ((vn_irflag_read(vp) & VIRF_KNOTE) != 0) {
-		KNOTE_UNLOCKED(&vp->v_pollinfo->vpi_selinfo.si_note,
-		    hint);
+	if ((vp->v_v2flag & V2_KNOTE) != 0) {
+		KNOTE(&vp->v_pollinfo->vpi_selinfo.si_note,
+		    hint, KNF_NOKQLOCK);
 	}
 }
 
@@ -1061,6 +1062,8 @@ void	vfs_exjail_delete(struct prison *);
 int	vfs_export			 /* process mount export info */
 	    (struct mount *, struct export_args *, bool);
 void	vfs_free_addrlist(struct netexport *);
+u_int	vfs_netexport_acquire(struct netexport *);
+void	vfs_netexport_release(struct netexport *);
 void	vfs_allocate_syncvnode(struct mount *);
 void	vfs_deallocate_syncvnode(struct mount *);
 int	vfs_donmount(struct thread *td, uint64_t fsflags,
@@ -1243,7 +1246,7 @@ int	fhstat(const struct fhandle *, struct stat *);
 int	fhstatfs(const struct fhandle *, struct statfs *);
 int	fstatfs(int, struct statfs *);
 int	getfh(const char *, fhandle_t *);
-int	getfhat(int, char *, struct fhandle *, int);
+int	getfhat(int, const char *, struct fhandle *, int);
 int	getfsstat(struct statfs *, long, int);
 int	getmntinfo(struct statfs **, int);
 int	lgetfh(const char *, fhandle_t *);
